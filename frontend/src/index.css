@@ -1,0 +1,19 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  background-color: #f9f9f9;
+  color: #111111;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, sans-serif;
+  font-feature-settings: "cv11", "ss03", "ss04";
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
