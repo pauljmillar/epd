@@ -46,8 +46,8 @@ export interface OrgMetrics {
     time_to_first_review: { week: string; value: number | null }[];
     ai_assisted: { week: string; value: number | null }[];
   };
-  teams: {
-    name: string;
+  repos: {
+    full_name: string;
     prs_merged: number;
     throughput_per_week: number;
     deploy_per_week: number;
@@ -89,8 +89,8 @@ export interface BaseMetrics {
   notable_prs?: { lead_time: NotablePR[] };
 }
 
-export interface TeamMetrics extends BaseMetrics {
-  team: { name: string };
+export interface RepoMetrics extends BaseMetrics {
+  repo: { full_name: string };
   contributors: {
     login: string;
     prs_merged: number;
@@ -102,6 +102,34 @@ export interface TeamMetrics extends BaseMetrics {
     time_to_first_review_hours: number | null;
     ai_assisted_pct: number | null;
   }[];
+}
+
+export interface TeamSummary {
+  id: number;
+  name: string;
+  members: number;
+}
+
+export interface TeamMember {
+  login: string;
+  display_name: string;
+}
+
+export interface TeamMetrics extends BaseMetrics {
+  team: { id: number; name: string; members: TeamMember[] };
+  repos: { full_name: string; prs_merged: number; throughput_per_week: number; lead_time_p50_hours: number | null }[];
+  members_breakdown: {
+    login: string;
+    prs_merged: number;
+    throughput_per_week: number;
+    lead_time_p50_hours: number | null;
+  }[];
+}
+
+export interface ContributorListItem {
+  login: string;
+  display_name: string;
+  prs_merged_90d: number;
 }
 
 export interface RecentPR {

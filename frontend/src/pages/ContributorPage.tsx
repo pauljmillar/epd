@@ -151,7 +151,7 @@ function Body({ data }: { data: ContributorMetrics }) {
                   </a>
                 </td>
                 <td className="px-4 py-3 text-text-secondary">
-                  <Link to={`/teams/${p.repo}`}>{p.repo}</Link>
+                  <Link to={`/repos/${p.repo}`}>{p.repo}</Link>
                 </td>
                 <td className="px-4 py-3 text-text-secondary">
                   {p.merged_at ? p.merged_at.slice(0, 10) : "—"}

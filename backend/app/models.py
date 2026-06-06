@@ -46,6 +46,21 @@ class Repository(Base):
     __table_args__ = (UniqueConstraint("source", "source_id", name="uq_repo_source"),)
 
 
+class Team(Base):
+    __tablename__ = "teams"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    source_team_id: Mapped[str | None] = mapped_column(String(64))
+
+
+class TeamMember(Base):
+    __tablename__ = "team_members"
+
+    team_id: Mapped[int] = mapped_column(ForeignKey("teams.id"), primary_key=True)
+    contributor_id: Mapped[int] = mapped_column(ForeignKey("contributors.id"), primary_key=True)
+
+
 class PullRequest(Base):
     __tablename__ = "pull_requests"
 

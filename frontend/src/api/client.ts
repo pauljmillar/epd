@@ -74,13 +74,13 @@ export function useOrgMetrics(period: string) {
   });
 }
 
-export function useTeamMetrics(teamName: string | undefined, period: string) {
+export function useRepoMetrics(repoFullName: string | undefined, period: string) {
   return useQuery({
-    queryKey: ["team", teamName, period],
-    enabled: !!teamName,
+    queryKey: ["repo", repoFullName, period],
+    enabled: !!repoFullName,
     queryFn: () =>
-      get<import("./types").TeamMetrics>(
-        `/api/v1/metrics/team/${encodeURIComponent(teamName!)}?period=${period}`,
+      get<import("./types").RepoMetrics>(
+        `/api/v1/metrics/repo/${repoFullName}?period=${period}`,
       ),
   });
 }
@@ -96,13 +96,93 @@ export function useContributorMetrics(login: string | undefined, period: string)
   });
 }
 
+export function useReposList() {
+  return useQuery({
+    queryKey: ["repos"],
+    queryFn: () =>
+      get<{ repos: { full_name: string; prs_merged_90d: number }[] }>(
+        "/api/v1/metrics/repos",
+      ),
+  });
+}
+
+export function useContributorsList() {
+  return useQuery({
+    queryKey: ["contributors-list"],
+    queryFn: () =>
+      get<{ contributors: import("./types").ContributorListItem[] }>(
+        "/api/v1/metrics/contributors?limit=200",
+      ),
+  });
+}
+
 export function useTeamsList() {
   return useQuery({
-    queryKey: ["teams"],
-    queryFn: () => get<{ teams: { name: string; prs_merged_90d: number }[] }>(
-      "/api/v1/metrics/teams",
-    ),
+    queryKey: ["teams-list"],
+    queryFn: () =>
+      get<{ teams: import("./types").TeamSummary[] }>("/api/v1/teams"),
   });
+}
+
+export function useTeamMetrics(teamId: number | undefined, period: string) {
+  return useQuery({
+    queryKey: ["team", teamId, period],
+    enabled: teamId !== undefined,
+    queryFn: () =>
+      get<import("./types").TeamMetrics>(
+        `/api/v1/teams/${teamId}/metrics?period=${period}`,
+      ),
+  });
+}
+
+async function postJson<T>(path: string, body: unknown): Promise<T> {
+  const t = getToken();
+  const r = await fetch(`${API_BASE}${path}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(t ? { Authorization: `Bearer ${t}` } : {}),
+    },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+  return r.json();
+}
+
+async function del(path: string): Promise<void> {
+  const t = getToken();
+  const r = await fetch(`${API_BASE}${path}`, {
+    method: "DELETE",
+    headers: t ? { Authorization: `Bearer ${t}` } : {},
+  });
+  if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+}
+
+export async function createTeam(name: string) {
+  return postJson<{ id: number; name: string; members: number }>("/api/v1/teams", { name });
+}
+
+export async function deleteTeam(id: number) {
+  await del(`/api/v1/teams/${id}`);
+}
+
+export async function addTeamMember(teamId: number, login: string) {
+  return postJson<{ ok: true }>(`/api/v1/teams/${teamId}/members`, { login });
+}
+
+export async function removeTeamMember(teamId: number, login: string) {
+  await del(`/api/v1/teams/${teamId}/members/${encodeURIComponent(login)}`);
+}
+
+export async function getTeamMembers(teamId: number) {
+  const r = await fetch(`${API_BASE}/api/v1/teams/${teamId}/members`, {
+    headers: getToken() ? { Authorization: `Bearer ${getToken()!}` } : {},
+  });
+  if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+  return r.json() as Promise<{
+    team: { id: number; name: string };
+    members: import("./types").TeamMember[];
+  }>;
 }
 
 export function useSyncStatus() {

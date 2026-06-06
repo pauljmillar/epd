@@ -153,7 +153,7 @@ function fmt(unit: string, v: number | null): string {
 }
 
 function TeamTable({ data, metricKey }: { data: OrgMetrics; metricKey: MetricKey }) {
-  const teamField: Record<MetricKey, keyof OrgMetrics["teams"][0]> = {
+  const repoField: Record<MetricKey, keyof OrgMetrics["repos"][0]> = {
     deployment_frequency: "deploy_per_week",
     lead_time_p50: "lead_time_p50_hours",
     pr_cycle_time: "pr_cycle_time_hours",
@@ -163,9 +163,9 @@ function TeamTable({ data, metricKey }: { data: OrgMetrics; metricKey: MetricKey
     time_to_first_review: "time_to_first_review_hours",
     ai_assisted: "ai_assisted_pct",
   };
-  const field = teamField[metricKey];
+  const field = repoField[metricKey];
   const unit = data.kpis[metricKey].unit;
-  const sorted = [...data.teams].sort((a, b) => {
+  const sorted = [...data.repos].sort((a, b) => {
     const av = a[field] as number | null;
     const bv = b[field] as number | null;
     if (av === null && bv === null) return 0;
@@ -177,7 +177,7 @@ function TeamTable({ data, metricKey }: { data: OrgMetrics; metricKey: MetricKey
   return (
     <div className="bg-card border border-border rounded">
       <div className="px-4 py-3 border-b border-border text-text font-medium text-[13px]">
-        Team breakdown
+        Repo breakdown
       </div>
       <table className="w-full text-sm">
         <thead>
@@ -191,9 +191,9 @@ function TeamTable({ data, metricKey }: { data: OrgMetrics; metricKey: MetricKey
         </thead>
         <tbody>
           {sorted.map((t) => (
-            <tr key={t.name} className="border-t border-border-subtle hover:bg-active">
+            <tr key={t.full_name} className="border-t border-border-subtle hover:bg-active">
               <td className="px-4 py-3 text-text">
-                <Link to={`/teams/${t.name}`}>{t.name}</Link>
+                <Link to={`/repos/${t.full_name}`}>{t.full_name}</Link>
               </td>
               <td className="px-4 py-3 text-right text-text">
                 {fmt(unit, t[field] as number | null)}
@@ -242,7 +242,7 @@ function NotablePRs({
                 </a>
               </td>
               <td className="px-4 py-3 text-text-secondary">
-                <Link to={`/teams/${p.repo}`}>{p.repo}</Link>
+                <Link to={`/repos/${p.repo}`}>{p.repo}</Link>
               </td>
               <td className="px-4 py-3 text-text-secondary">
                 {p.author ? <Link to={`/contributors/${p.author}`}>{p.author}</Link> : "—"}

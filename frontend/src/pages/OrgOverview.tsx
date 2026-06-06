@@ -40,7 +40,7 @@ function OverviewBody({ data }: { data: OrgMetrics }) {
         </ChartCard>
       </div>
 
-      <TeamTable teams={data.teams} largePrThreshold={data.config.large_pr_threshold} />
+      <RepoTable repos={data.repos} largePrThreshold={data.config.large_pr_threshold} />
     </>
   );
 }
@@ -94,17 +94,17 @@ function fmtHours(v: number | null): string {
   return `${v.toFixed(1)}h`;
 }
 
-function TeamTable({
-  teams,
+function RepoTable({
+  repos,
   largePrThreshold,
 }: {
-  teams: OrgMetrics["teams"];
+  repos: OrgMetrics["repos"];
   largePrThreshold: number;
 }) {
-  if (!teams.length) {
+  if (!repos.length) {
     return (
       <div className="bg-card border border-border rounded p-6 text-text-secondary text-sm">
-        No team data yet — waiting on first sync.
+        No repo data yet — waiting on first sync.
       </div>
     );
   }
@@ -112,9 +112,6 @@ function TeamTable({
     <div className="bg-card border border-border rounded">
       <div className="px-4 py-3 border-b border-border flex items-center justify-between">
         <div className="text-text font-medium text-[13px]">Repository breakdown</div>
-        <div className="text-text-tertiary text-xs">
-          ⓘ v0 uses repos as teams. Configure GitHub teams in v1.
-        </div>
       </div>
       <table className="w-full text-sm">
         <thead>
@@ -133,17 +130,17 @@ function TeamTable({
           </tr>
         </thead>
         <tbody>
-          {teams.map((t) => {
+          {repos.map((t) => {
             const sizeIsLarge =
               t.median_pr_size_lines !== null && t.median_pr_size_lines > largePrThreshold;
             return (
               <tr
-                key={t.name}
+                key={t.full_name}
                 className="border-t border-border-subtle hover:bg-active cursor-pointer"
               >
                 <td className="px-4 py-3 text-text">
-                  <Link to={`/teams/${t.name}`} className="block">
-                    {t.name}
+                  <Link to={`/repos/${t.full_name}`} className="block">
+                    {t.full_name}
                   </Link>
                 </td>
                 <td className="px-4 py-3 text-right text-text">

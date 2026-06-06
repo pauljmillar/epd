@@ -1,25 +1,30 @@
 import { useState } from "react";
-import { Link, useLocation } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import { useTeamMetrics } from "../api/client";
 import type { TeamMetrics } from "../api/types";
 import { MetricsBody } from "../components/MetricsBody";
 import { PageHeader } from "../components/PageHeader";
 
 export function TeamDetail() {
-  const location = useLocation();
-  // /teams/astral-sh/uv → teamName = "astral-sh/uv"
-  const teamName = location.pathname.replace(/^\/teams\//, "") || undefined;
+  const { teamId } = useParams<{ teamId: string }>();
+  const id = teamId ? Number(teamId) : undefined;
   const [period, setPeriod] = useState("90d");
-  const { data, isLoading, error } = useTeamMetrics(teamName, period);
+  const { data, isLoading, error } = useTeamMetrics(id, period);
 
   return (
     <div>
       <div className="text-text-tertiary text-xs mb-2">
         <Link to="/" className="hover:text-text">Overview</Link>
         <span className="mx-2">›</span>
-        <span className="text-text">{teamName}</span>
+        <Link to="/teams" className="hover:text-text">Teams</Link>
+        <span className="mx-2">›</span>
+        <span className="text-text">{data?.team.name ?? `#${teamId}`}</span>
       </div>
-      <PageHeader title={teamName ?? "Team"} period={period} onPeriodChange={setPeriod} />
+      <PageHeader
+        title={data?.team.name ?? `Team #${teamId}`}
+        period={period}
+        onPeriodChange={setPeriod}
+      />
 
       {error && (
         <div className="bg-card border border-alert text-alert p-4 rounded mb-4 text-sm">
@@ -27,80 +32,114 @@ export function TeamDetail() {
         </div>
       )}
       {isLoading && <div className="text-text-secondary text-sm">Loading…</div>}
-      {data && <TeamBody data={data} />}
+      {data && <Body data={data} />}
     </div>
   );
 }
 
-function TeamBody({ data }: { data: TeamMetrics }) {
+function Body({ data }: { data: TeamMetrics }) {
   return (
     <>
-      <MetricsBody data={data} linkPrefix={`/metrics`} />
-
-      <div className="bg-card border border-border rounded mb-6">
-        <div className="px-4 py-3 border-b border-border flex items-center justify-between">
-          <div className="text-text font-medium text-[13px]">
-            Contributor context — {data.team.name}
-          </div>
-          <div className="text-text-tertiary text-xs">
-            ⓘ This view is for context, not evaluation.
-          </div>
+      <div className="bg-card border border-border rounded p-4 mb-6 text-sm">
+        <div className="text-text-secondary mb-2">
+          {data.team.members.length} members:
         </div>
+        <div className="flex flex-wrap gap-1.5">
+          {data.team.members.map((m) => (
+            <Link
+              key={m.login}
+              to={`/contributors/${m.login}`}
+              className="inline-block px-2 py-0.5 text-xs bg-active text-text rounded hover:border hover:border-text-tertiary"
+            >
+              {m.login}
+            </Link>
+          ))}
+          {data.team.members.length === 0 && (
+            <span className="text-text-tertiary text-xs">
+              No members yet — add some from{" "}
+              <Link to="/teams" className="underline">Teams admin</Link>.
+            </span>
+          )}
+        </div>
+      </div>
+
+      <MetricsBody data={data} linkPrefix="/metrics" />
+
+      <div className="grid grid-cols-2 gap-3 mb-6">
+        <ListCard
+          title="Repos touched"
+          headers={["Repo", "PRs", "Lead Time"]}
+          rows={data.repos.map((r) => ({
+            key: r.full_name,
+            href: `/repos/${r.full_name}`,
+            cells: [
+              r.full_name,
+              String(r.prs_merged),
+              fmtHours(r.lead_time_p50_hours),
+            ],
+          }))}
+        />
+        <ListCard
+          title="Members breakdown"
+          headers={["Contributor", "PRs", "Lead Time"]}
+          rows={data.members_breakdown.map((m) => ({
+            key: m.login,
+            href: `/contributors/${m.login}`,
+            cells: [m.login, String(m.prs_merged), fmtHours(m.lead_time_p50_hours)],
+          }))}
+        />
+      </div>
+    </>
+  );
+}
+
+function ListCard({
+  title,
+  headers,
+  rows,
+}: {
+  title: string;
+  headers: string[];
+  rows: { key: string; href: string; cells: string[] }[];
+}) {
+  return (
+    <div className="bg-card border border-border rounded">
+      <div className="px-4 py-3 border-b border-border text-text font-medium text-[13px]">
+        {title}
+      </div>
+      {rows.length === 0 ? (
+        <div className="p-4 text-text-tertiary text-sm">No data</div>
+      ) : (
         <table className="w-full text-sm">
           <thead>
             <tr className="text-text-tertiary text-[11px] uppercase tracking-wider">
-              <th className="text-left px-4 py-2 font-semibold">Contributor</th>
-              <th className="text-right px-4 py-2 font-semibold">PRs</th>
-              <th className="text-right px-4 py-2 font-semibold">Lead Time</th>
-              <th className="text-right px-4 py-2 font-semibold">Cycle Time</th>
-              <th className="text-right px-4 py-2 font-semibold">PR Size</th>
-              <th className="text-right px-4 py-2 font-semibold">Coverage</th>
-              <th className="text-right px-4 py-2 font-semibold">1st Review</th>
-              <th className="text-right px-4 py-2 font-semibold">AI %</th>
+              {headers.map((h, i) => (
+                <th
+                  key={h}
+                  className={`px-4 py-2 font-semibold ${i === 0 ? "text-left" : "text-right"}`}
+                >
+                  {h}
+                </th>
+              ))}
             </tr>
           </thead>
           <tbody>
-            {data.contributors.map((c) => (
-              <tr key={c.login} className="border-t border-border-subtle hover:bg-active">
-                <td className="px-4 py-3 text-text">
-                  <Link to={`/contributors/${c.login}`} className="block">
-                    {c.login}
-                  </Link>
-                </td>
-                <td className="px-4 py-3 text-right text-text-secondary">{c.prs_merged}</td>
-                <td className="px-4 py-3 text-right text-text">
-                  {fmtHours(c.lead_time_p50_hours)}
-                </td>
-                <td className="px-4 py-3 text-right text-text">
-                  {fmtHours(c.pr_cycle_time_hours)}
-                </td>
-                <td
-                  className={`px-4 py-3 text-right ${
-                    c.median_pr_size_lines !== null &&
-                    c.median_pr_size_lines > data.config.large_pr_threshold
-                      ? "text-alert"
-                      : "text-text"
-                  }`}
-                >
-                  {c.median_pr_size_lines === null
-                    ? "—"
-                    : `${Math.round(c.median_pr_size_lines)} L`}
-                </td>
-                <td className="px-4 py-3 text-right text-text">
-                  {c.review_coverage_pct === null ? "—" : `${c.review_coverage_pct.toFixed(0)}%`}
-                </td>
-                <td className="px-4 py-3 text-right text-text">
-                  {fmtHours(c.time_to_first_review_hours)}
-                </td>
-                <td className="px-4 py-3 text-right text-text">
-                  {c.ai_assisted_pct === null ? "—" : `${c.ai_assisted_pct.toFixed(0)}%`}
-                </td>
+            {rows.map((r) => (
+              <tr key={r.key} className="border-t border-border-subtle hover:bg-active">
+                {r.cells.map((c, i) => (
+                  <td
+                    key={i}
+                    className={`px-4 py-3 ${i === 0 ? "text-text" : "text-right text-text-secondary"}`}
+                  >
+                    {i === 0 ? <Link to={r.href}>{c}</Link> : c}
+                  </td>
+                ))}
               </tr>
             ))}
           </tbody>
         </table>
-      </div>
-    </>
+      )}
+    </div>
   );
 }
 

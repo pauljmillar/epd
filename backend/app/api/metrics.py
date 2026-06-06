@@ -107,9 +107,10 @@ def _load_period_prs(
     *,
     repo_full_name: str | None = None,
     author_login: str | None = None,
+    author_logins: list[str] | None = None,
 ) -> list[dict]:
-    """Load merged PRs in [start, end] with first-commit + reviews attached. Optionally
-    filtered to one repo and/or one author (filters compose)."""
+    """Load merged PRs in [start, end] with first-commit + reviews attached. Optional filters
+    compose: one repo and/or one author and/or a set of author logins (for team scoping)."""
     excluded = settings.excluded_user_set
 
     # First-commit per PR
@@ -131,6 +132,11 @@ def _load_period_prs(
         stmt = stmt.where(Repository.full_name == repo_full_name)
     if author_login is not None:
         stmt = stmt.where(Contributor.login == author_login)
+    if author_logins is not None:
+        if not author_logins:
+            # An explicit empty member list means "no PRs".
+            return []
+        stmt = stmt.where(Contributor.login.in_(author_logins))
 
     pr_rows = s.execute(stmt).all()
     pr_id_set = {pr.id for pr, _, _ in pr_rows}
@@ -448,12 +454,12 @@ def org_metrics(
     for d in cur_deps:
         deps_by_repo.setdefault(d["repo_full_name"], []).append(d)
 
-    teams = []
+    repos = []
     for repo, prs in sorted(by_repo.items()):
         p50, _ = lt.aggregate(prs)
-        teams.append(
+        repos.append(
             {
-                "name": repo,
+                "full_name": repo,
                 "prs_merged": len(prs),
                 "throughput_per_week": round(len(prs) / weeks_in_period, 2),
                 "deploy_per_week": round(len(deps_by_repo.get(repo, [])) / weeks_in_period, 2),
@@ -465,29 +471,28 @@ def org_metrics(
                 "ai_assisted_pct": _ai_pct(prs),
             }
         )
-    payload["teams"] = teams
+    payload["repos"] = repos
 
     _cache_put(cache_key, payload)
     return payload
 
 
-@router.get("/team/{team_name:path}")
-def team_metrics(
-    team_name: str,
+@router.get("/repo/{repo_full_name:path}")
+def repo_metrics(
+    repo_full_name: str,
     period: str = Query("90d"),
     s: Session = Depends(get_session),
 ) -> dict:
-    cache_key = f"team:{team_name}:{period}"
+    cache_key = f"repo:{repo_full_name}:{period}"
     cached = _cache_get(cache_key)
     if cached is not None:
         return cached
 
-    # Verify team exists (in v0 = repo with this full_name)
     exists = s.execute(
-        select(Repository.id).where(Repository.full_name == team_name)
+        select(Repository.id).where(Repository.full_name == repo_full_name)
     ).first()
     if not exists:
-        raise HTTPException(404, f"Team (repo) {team_name!r} not found")
+        raise HTTPException(404, f"Repo {repo_full_name!r} not found")
 
     start, end = _date_range(period)
     prior_start = start - (end - start)
@@ -495,11 +500,11 @@ def team_metrics(
     horizon = _backfill_horizon(s)
     prior_is_valid = horizon is None or prior_start >= horizon
 
-    cur_prs = _load_period_prs(s, start, end, repo_full_name=team_name)
-    cur_deps = _load_period_deployments(s, start, end, repo_full_name=team_name)
+    cur_prs = _load_period_prs(s, start, end, repo_full_name=repo_full_name)
+    cur_deps = _load_period_deployments(s, start, end, repo_full_name=repo_full_name)
     if prior_is_valid:
-        prior_prs = _load_period_prs(s, prior_start, prior_end, repo_full_name=team_name)
-        prior_deps = _load_period_deployments(s, prior_start, prior_end, repo_full_name=team_name)
+        prior_prs = _load_period_prs(s, prior_start, prior_end, repo_full_name=repo_full_name)
+        prior_deps = _load_period_deployments(s, prior_start, prior_end, repo_full_name=repo_full_name)
     else:
         prior_prs = None
         prior_deps = None
@@ -508,7 +513,7 @@ def team_metrics(
     payload["period"] = period
     payload["range"] = {"start": start.isoformat(), "end": end.isoformat()}
     payload["config"] = {"large_pr_threshold": settings.large_pr_threshold}
-    payload["team"] = {"name": team_name}
+    payload["repo"] = {"full_name": repo_full_name}
     payload["notable_prs"] = {"lead_time": _notable_prs_by_lead_time(cur_prs)}
 
     # Contributor context table — per-author stats inside this team
@@ -614,15 +619,15 @@ def contributor_metrics(
     return payload
 
 
-@router.get("/teams")
-def list_teams(s: Session = Depends(get_session)) -> dict:
-    """List teams (repos in v0) with PR count over the last 90d for sidebar ordering."""
-    cache_key = "teams_list"
+@router.get("/repos")
+def list_repos(s: Session = Depends(get_session)) -> dict:
+    """List tracked repos with PR count over the last 90d for sidebar ordering."""
+    cache_key = "repos_list"
     cached = _cache_get(cache_key)
     if cached is not None:
         return cached
 
-    start, end = _date_range("90d")
+    start, _end = _date_range("90d")
     rows = s.execute(
         select(
             Repository.full_name,
@@ -637,19 +642,19 @@ def list_teams(s: Session = Depends(get_session)) -> dict:
         .group_by(Repository.full_name)
         .order_by(func.count(PullRequest.id).desc())
     ).all()
-    payload = {"teams": [{"name": full, "prs_merged_90d": int(prs)} for full, prs in rows]}
+    payload = {"repos": [{"full_name": full, "prs_merged_90d": int(prs)} for full, prs in rows]}
     _cache_put(cache_key, payload)
     return payload
 
 
 @router.get("/contributors")
 def list_contributors(
-    team: str | None = Query(None),
-    limit: int = Query(50, le=200),
+    repo: str | None = Query(None),
+    limit: int = Query(200, le=500),
     s: Session = Depends(get_session),
 ) -> dict:
-    """List contributors ordered by 90-day PR count. Optional team= filter."""
-    cache_key = f"contributors_list:{team}:{limit}"
+    """List contributors ordered by 90-day PR count. Optional repo= filter."""
+    cache_key = f"contributors_list:{repo}:{limit}"
     cached = _cache_get(cache_key)
     if cached is not None:
         return cached
@@ -664,9 +669,9 @@ def list_contributors(
         .order_by(func.count(PullRequest.id).desc())
         .limit(limit)
     )
-    if team is not None:
+    if repo is not None:
         stmt = stmt.join(Repository, PullRequest.repo_id == Repository.id).where(
-            Repository.full_name == team
+            Repository.full_name == repo
         )
     rows = s.execute(stmt).all()
     payload = {
