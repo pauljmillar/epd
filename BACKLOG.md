@@ -61,17 +61,27 @@ Possible future improvements (not blocking anything):
 
 ---
 
-## Phase B+ — Manual team grouping
+## Phase B+ — Manual team grouping ✅ DONE
 
-Most orgs don't expose GitHub teams to a PAT. Today EPD falls back to "one team per repo,"
-which the UI labels honestly. This phase adds true teams managed in EPD itself.
+- [x] Schema: migration 0004 finally creates `teams` + `team_members` (they were specced in
+      BRD §13 but missing from migration 0001).
+- [x] Admin UI at `/teams`: two-pane create/delete on left, member-chip + filterable picker
+      on right.
+- [x] Conceptual rename: repo-scoped routes/endpoints/labels renamed `team→repo`; "Teams"
+      now means a group of contributors, not a repo.
+- [x] Multi-team membership works (a contributor can be added to multiple teams; team
+      metrics just filter PRs by `author IN (team members)`).
+- [x] Sidebar split into 4 sections: Overview · Repos · Teams · Contributors. Each has its
+      own index page and collapsible inline list.
 
-- [ ] **BP1. Schema is already there.** `teams` and `team_members` tables exist (migration 0001).
-- [ ] **BP2. Admin UI: list contributors, assign to teams.** Two-pane: contributor list on the
-      left, team management on the right. Drag-and-drop or checkbox-based.
-- [ ] **BP3. Replace repo-as-team fallback** when at least one EPD-defined team exists.
-- [ ] **BP4. Contributor can belong to multiple teams** (engineering managers sit on multiple
-      squads). Decide aggregation rule for stats (sum vs avg vs primary team).
+**Carried forward:**
+
+- [ ] Contributor page's "vs team median" still uses repo-as-team math (since it pre-dates
+      real teams). Switch to "vs any EPD team this person belongs to" once we have the
+      data structures in place.
+- [ ] Per-member AI-assisted % on the Team Detail page (the per-repo breakdown shows lead
+      time and PR count but not AI%).
+- [ ] Inline rename of a team (currently only create/delete).
 
 ---
 
