@@ -1,8 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
 import type { OrgMetrics, SyncStatus } from "./types";
 
+// In dev (no VITE_API_URL), use the Vite proxy ("/api/..."). In production builds, prefix
+// every request with the absolute backend URL (Railway, etc.).
+const API_BASE = (import.meta.env.VITE_API_URL ?? "").replace(/\/$/, "");
+
 async function get<T>(path: string): Promise<T> {
-  const r = await fetch(path);
+  const r = await fetch(`${API_BASE}${path}`);
   if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
   return r.json() as Promise<T>;
 }

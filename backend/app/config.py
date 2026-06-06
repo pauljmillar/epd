@@ -33,6 +33,13 @@ class Settings(BaseSettings):
     # Optional auth
     admin_password: str | None = None
 
+    # CORS — comma-separated list of frontend origins allowed to call the API.
+    cors_origins: str = "http://localhost:5173,http://localhost:3000,http://localhost:5174"
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
     @property
     def excluded_repo_set(self) -> set[str]:
         return {r.strip() for r in self.excluded_repos.split(",") if r.strip()}
