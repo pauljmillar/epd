@@ -6,53 +6,37 @@ where applicable.
 
 ---
 
-## Phase A — Production-credible (next)
+## Phase A — Production-credible ✅ DONE
 
-The v0 dashboard works against a public demo org but isn't ready to point at a real company's
-data. This phase closes that gap.
+- [x] A1. Suppress bogus % deltas at the backfill horizon — `null` deltas now shown as
+      "— no prior data".
+- [x] A2. Snapshot builder populates every column from migration 0002. **Read path still
+      live-computes;** snapshot reads remain a TODO for the 500-repo perf path.
+- [x] A3. 5-min in-process TTL cache on `/metrics/org`, invalidated by sync.
+- [x] A4. Optional `ADMIN_PASSWORD` bearer-token auth on `/metrics` and `/sync`.
+- [x] A5. README rewrite + Deploy buttons for Vercel/Railway.
 
-- [ ] **A1. Suppress bogus % deltas at the backfill horizon.** Currently the prior-period
-      delta can show e.g. `+258,400%` because the prior 90d window predates the backfill and
-      has near-zero data. Detect this case and return `null` so the UI shows "— no prior data"
-      instead of a misleading number.
-- [ ] **A2. Read snapshots for closed months.** `/api/v1/metrics/org` currently loads every PR
-      in the period into memory and computes live. The `contributor_month_snapshots` columns
-      exist (migration 0002) but aren't read. For closed months, query the snapshot table
-      directly; only the current (in-progress) month does live compute. This is the perf path
-      to 500 repos / ~1M rows.
-- [ ] **A3. Short-TTL response cache.** Cache `/metrics/org` responses for ~5 min per
-      `(period)` key. Data only changes nightly; serving cached responses cuts DB load.
-- [ ] **A4. Basic password auth.** Wire `ADMIN_PASSWORD` through — if set, require a bearer
-      token on every `/api/v1/*` route except `/health`. No SSO/OAuth in this phase (BRD §17
-      out-of-scope for v1).
-- [ ] **A5. README + "Deploy to Vercel/Railway" buttons.** Reflect the 7 working metrics, the
-      live demo URL, and one-click deploy paths.
+**Carried forward (didn't fit Phase A):**
+
+- [ ] **A2-followup. Read snapshots for closed months.** Snapshot table is now populated but
+      `/metrics/org` still loads raw PRs every request. At 500-repo scale (~1M rows) this
+      should switch: closed months read from `contributor_month_snapshots`, current month does
+      live compute. The cache (A3) takes the edge off until then.
 
 ---
 
-## Phase B-prep — AI-assisted change attribution
+## Phase B-prep — AI-assisted change attribution ✅ DONE
 
-Detect which PRs were produced with help from AI coding tools (Cursor, Claude Code, Codex,
-Copilot, etc.). This is novel — no other dashboard does it well yet — and it answers a
-question every engineering exec is asking right now. User flagged this as likely-before the
-drill-down pages.
+Shipped. Detection via merge-commit `Co-Authored-By:` trailers + PR body markers for Claude,
+Cursor, Copilot, Codex, Windsurf. Tooltip honestly calls out that this is a lower bound.
 
-- [ ] **AI1. Signal sources.** Decide which signals to ingest (in priority order):
-      1. **Commit trailers** — `Co-Authored-By: Claude <noreply@anthropic.com>`, similar for
-         other tools. Already in commit messages, just need to parse.
-      2. **PR body markers** — "🤖 Generated with Claude Code", "Made with Cursor", etc.
-      3. **Known bot/co-author email patterns** — `noreply@anthropic.com`,
-         `*@cursor.com`, `copilot[bot]`.
-      4. **Author metadata** — some tools set `Author` on the commit; harder to attribute.
-- [ ] **AI2. Storage.** Add `ai_assisted: bool` and `ai_tool: str | null` columns to
-      `pull_requests`. Detection runs during sync.
-- [ ] **AI3. Configurable patterns.** Ship sensible defaults (Claude, Cursor, Copilot, Codex,
-      Windsurf) in code; allow `AI_TOOL_PATTERNS` env-var override for orgs that use other
-      tools or internal naming.
-- [ ] **AI4. KPI + breakdown.** Add an "AI-assisted PRs" KPI: % of merged PRs in the period
-      that have at least one AI signal. Show by tool in the team table.
-- [ ] **AI5. Be honest about limits.** Detection is signal-based and will undercount (devs who
-      use AI but strip trailers). Tooltip must call this out.
+Possible future improvements (not blocking anything):
+
+- [ ] Expand detection to scan all commit messages in a PR (currently only the merge commit
+      body + PR body). Catches merge-commit-style repos.
+- [ ] Per-PR tag in a future Contributor detail view ("This PR was AI-assisted with Claude").
+- [ ] Tool-vs-no-tool comparison on cycle time / size / coverage. Useful but loaded — handle
+      with care so it doesn't become "AI users are faster, fire everyone else."
 
 ---
 
