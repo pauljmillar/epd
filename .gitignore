@@ -29,3 +29,4 @@ frontend/dist/
 # db / local
 *.sqlite3
 *.db
+.vercel
