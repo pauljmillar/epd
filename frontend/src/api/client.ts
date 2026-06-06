@@ -185,6 +185,65 @@ export async function getTeamMembers(teamId: number) {
   }>;
 }
 
+// --- Admin: is_tracked toggles -----------------------------------------------
+
+export interface AdminRepo {
+  full_name: string;
+  is_tracked: boolean;
+  prs_merged_total: number;
+}
+
+export interface AdminContributor {
+  login: string;
+  display_name: string;
+  is_tracked: boolean;
+  prs_merged_total: number;
+}
+
+export function useAdminRepos() {
+  return useQuery({
+    queryKey: ["admin-repos"],
+    queryFn: () => get<{ repos: AdminRepo[] }>("/api/v1/admin/repos"),
+  });
+}
+
+export function useAdminContributors() {
+  return useQuery({
+    queryKey: ["admin-contributors"],
+    queryFn: () =>
+      get<{ contributors: AdminContributor[] }>("/api/v1/admin/contributors"),
+  });
+}
+
+async function patchJson<T>(path: string, body: unknown): Promise<T> {
+  const t = getToken();
+  const r = await fetch(`${API_BASE}${path}`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      ...(t ? { Authorization: `Bearer ${t}` } : {}),
+    },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+  return r.json();
+}
+
+export async function setRepoTracked(fullName: string, isTracked: boolean) {
+  // fullName may contain a slash; the backend route is :path
+  return patchJson<{ full_name: string; is_tracked: boolean }>(
+    `/api/v1/admin/repos/${fullName}`,
+    { is_tracked: isTracked },
+  );
+}
+
+export async function setContributorTracked(login: string, isTracked: boolean) {
+  return patchJson<{ login: string; is_tracked: boolean }>(
+    `/api/v1/admin/contributors/${encodeURIComponent(login)}`,
+    { is_tracked: isTracked },
+  );
+}
+
 export function useSyncStatus() {
   return useQuery({
     queryKey: ["sync-status"],

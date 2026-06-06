@@ -182,8 +182,22 @@ async def run_sync() -> dict:
             since = backfill_since()
             excluded = settings.excluded_repo_set
 
+            # CP+: pull the current is_tracked state so we can skip repos an admin has
+            # toggled off. Untracked repos still appear in /admin/repos so they can be
+            # turned back on later.
+            with session_scope() as s:
+                untracked_repo_full_names = {
+                    row[0]
+                    for row in s.execute(
+                        select(Repository.full_name).where(Repository.is_tracked.is_(False))
+                    ).all()
+                }
+
             for ref in refs:
                 if ref.name in excluded or ref.full_name in excluded:
+                    continue
+                if ref.full_name in untracked_repo_full_names:
+                    log.info("Skipping untracked repo %s", ref.full_name)
                     continue
                 try:
                     prs = await gh.list_merged_prs(ref, since)

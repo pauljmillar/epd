@@ -29,6 +29,7 @@ class Contributor(Base):
     login: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     display_name: Mapped[str | None] = mapped_column(String(256))
     avatar_url: Mapped[str | None] = mapped_column(String(512))
+    is_tracked: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
 
     __table_args__ = (UniqueConstraint("source", "source_id", name="uq_contributor_source"),)
 
@@ -42,6 +43,7 @@ class Repository(Base):
     name: Mapped[str] = mapped_column(String(256), nullable=False)
     full_name: Mapped[str] = mapped_column(String(512), nullable=False, index=True)
     default_branch: Mapped[str] = mapped_column(String(128), default="main")
+    is_tracked: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
 
     __table_args__ = (UniqueConstraint("source", "source_id", name="uq_repo_source"),)
 

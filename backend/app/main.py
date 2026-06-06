@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .api import health, metrics, sync, teams
+from .api import admin, health, metrics, sync, teams
 from .config import settings
 from .scheduler import start as start_scheduler
 from .scheduler import stop as stop_scheduler
@@ -39,3 +39,4 @@ app.include_router(health.router)
 app.include_router(metrics.router)
 app.include_router(sync.router)
 app.include_router(teams.router)
+app.include_router(admin.router)

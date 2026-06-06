@@ -127,6 +127,10 @@ def _load_period_prs(
         .where(PullRequest.merged_at.is_not(None))
         .where(PullRequest.merged_at >= datetime.combine(start, datetime.min.time(), timezone.utc))
         .where(PullRequest.merged_at <= datetime.combine(end, datetime.max.time(), timezone.utc))
+        # CP+: skip PRs from untracked repos or untracked authors. Author may be NULL (bot
+        # PRs with no contributor row); those pass through.
+        .where(Repository.is_tracked.is_(True))
+        .where((Contributor.is_tracked.is_(True)) | (Contributor.id.is_(None)))
     )
     if repo_full_name is not None:
         stmt = stmt.where(Repository.full_name == repo_full_name)
@@ -189,6 +193,7 @@ def _load_period_deployments(
         .join(Repository, Deployment.repo_id == Repository.id)
         .where(Deployment.triggered_at >= datetime.combine(start, datetime.min.time(), timezone.utc))
         .where(Deployment.triggered_at <= datetime.combine(end, datetime.max.time(), timezone.utc))
+        .where(Repository.is_tracked.is_(True))
     )
     if repo_full_name is not None:
         stmt = stmt.where(Repository.full_name == repo_full_name)
@@ -639,6 +644,7 @@ def list_repos(s: Session = Depends(get_session)) -> dict:
             & (PullRequest.merged_at.is_not(None))
             & (PullRequest.merged_at >= datetime.combine(start, datetime.min.time(), timezone.utc)),
         )
+        .where(Repository.is_tracked.is_(True))
         .group_by(Repository.full_name)
         .order_by(func.count(PullRequest.id).desc())
     ).all()
@@ -665,6 +671,7 @@ def list_contributors(
         .join(PullRequest, PullRequest.author_id == Contributor.id)
         .where(PullRequest.merged_at.is_not(None))
         .where(PullRequest.merged_at >= datetime.combine(start, datetime.min.time(), timezone.utc))
+        .where(Contributor.is_tracked.is_(True))
         .group_by(Contributor.login, Contributor.display_name)
         .order_by(func.count(PullRequest.id).desc())
         .limit(limit)
