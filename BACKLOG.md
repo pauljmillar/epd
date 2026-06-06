@@ -40,20 +40,24 @@ Possible future improvements (not blocking anything):
 
 ---
 
-## Phase B — Drill-down pages (BRD §12)
+## Phase B — Drill-down pages ✅ DONE
 
-Adds React Router and the three pages specified by the BRD beyond Org Overview.
+- [x] B1. `react-router-dom` v7. Routes: `/`, `/teams/*`, `/metrics/:metricKey`,
+      `/contributors/:login`. Vercel SPA rewrites in place for deep links.
+- [x] B2. Team Detail page (scoped Org Overview + per-author contributor table).
+- [x] B3. Metric Detail page (single-metric chart + team breakdown + notable PRs
+      for lead-time view).
+- [x] B4. Contributor page with prominent BRD §12 "context, not evaluation" banner +
+      stats-vs-team-median + last 20 PRs (with AI tool badges).
+- [x] B5. Sidebar populates with the top 30 teams (by 90-day PR count) from `/metrics/teams`.
 
-- [ ] **B1. Routing.** Add `react-router-dom`. Routes:
-      `/`, `/teams/:teamName`, `/metrics/:metricKey`, `/contributors/:login`.
-- [ ] **B2. Team Detail page.** Mirror of Org Overview scoped to one team, plus cycle-time
-      breakdown chart and contributor context table. Reuses existing components.
-- [ ] **B3. Metric Detail page.** Full-screen single metric with team breakdown table and
-      "notable PRs" list (longest lead times in period, links to GitHub/GitLab PR).
-- [ ] **B4. Individual Contributor page.** Per BRD §12: prominent "this view is for context,
-      not evaluation" banner. Shows the contributor's stats next to team medians + last 20 PRs.
-- [ ] **B5. Sidebar populates with teams.** Replace the static "(auto-populated after first
-      sync)" with the actual team list from the API.
+**Carried forward (didn't fit Phase B):**
+
+- [ ] Notable PRs for the other 7 metrics (currently only `lead_time_p50` has them). Add
+      `notable_prs_by_size`, `notable_prs_by_cycle_time`, etc.
+- [ ] Sortable table headers on the team table.
+- [ ] Pagination on lists >20 rows (BRD §12 design constraint).
+- [ ] Trend sparklines in the team table (currently empty placeholders).
 
 ---
 
