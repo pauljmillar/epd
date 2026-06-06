@@ -100,18 +100,22 @@ the GitLab implementation.
 
 ---
 
-## Phase C+ — Admin: repo include/exclude UI
+## Phase C+ — Admin: repo + contributor include/exclude UI ✅ DONE
 
-Currently `EXCLUDED_REPOS` is an env var (comma-separated). For 500-repo corporate accounts
-this needs to be a real UI.
+- [x] Migration 0005: `is_tracked` BOOLEAN on `repositories` AND `contributors`.
+- [x] PATCH `/api/v1/admin/repos/{full_name}` and `/api/v1/admin/contributors/{login}`.
+- [x] Admin lists at `/api/v1/admin/repos` and `/api/v1/admin/contributors` return
+      everything with current toggle state + lifetime PR counts.
+- [x] Every metric query filters by both flags; round-trip verified live (toggle ruff
+      off → org count drops by exactly 1,107).
+- [x] Sync skips untracked repos to save GitHub API rate-limit budget.
+- [x] Frontend ReposIndex and ContributorsIndex render the admin toggles with a
+      "show untracked" filter; untracked rows show at 50% opacity.
 
-- [ ] **CP1. DB-backed include/exclude.** `repository.is_tracked: bool` column; defaults to
-      include. Env var continues to work as a default for first sync.
-- [ ] **CP2. Admin page: "Repositories"** lists every repo discovered in the org with a
-      toggle for inclusion. Persists to DB. Re-sync respects the new list.
-- [ ] **CP3. Optional: similar for users.** Toggle to exclude specific contributors from
-      metrics (e.g., interns whose PRs would skew junior-pool stats; bot accounts not caught
-      by the bot-name patterns).
+**Carried forward (nice-to-have):**
+
+- [ ] Bulk-toggle ("untrack all dependabot/renovate bots in one click").
+- [ ] Sync log shows how many repos were skipped on each run.
 
 ---
 
