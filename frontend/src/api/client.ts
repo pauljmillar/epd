@@ -74,6 +74,37 @@ export function useOrgMetrics(period: string) {
   });
 }
 
+export function useTeamMetrics(teamName: string | undefined, period: string) {
+  return useQuery({
+    queryKey: ["team", teamName, period],
+    enabled: !!teamName,
+    queryFn: () =>
+      get<import("./types").TeamMetrics>(
+        `/api/v1/metrics/team/${encodeURIComponent(teamName!)}?period=${period}`,
+      ),
+  });
+}
+
+export function useContributorMetrics(login: string | undefined, period: string) {
+  return useQuery({
+    queryKey: ["contributor", login, period],
+    enabled: !!login,
+    queryFn: () =>
+      get<import("./types").ContributorMetrics>(
+        `/api/v1/metrics/contributor/${encodeURIComponent(login!)}?period=${period}`,
+      ),
+  });
+}
+
+export function useTeamsList() {
+  return useQuery({
+    queryKey: ["teams"],
+    queryFn: () => get<{ teams: { name: string; prs_merged_90d: number }[] }>(
+      "/api/v1/metrics/teams",
+    ),
+  });
+}
+
 export function useSyncStatus() {
   return useQuery({
     queryKey: ["sync-status"],

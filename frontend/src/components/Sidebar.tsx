@@ -1,16 +1,9 @@
-import { useSyncStatus } from "../api/client";
-
-interface NavItem {
-  label: string;
-  active?: boolean;
-}
-
-const nav: NavItem[] = [
-  { label: "Overview", active: true },
-];
+import { NavLink } from "react-router-dom";
+import { useSyncStatus, useTeamsList } from "../api/client";
 
 export function Sidebar({ appName }: { appName: string }) {
   const { data: sync } = useSyncStatus();
+  const { data: teams } = useTeamsList();
   const synced = sync?.completed_at ? new Date(sync.completed_at) : null;
   const status = sync?.status ?? "never_run";
   const failed =
@@ -23,33 +16,46 @@ export function Sidebar({ appName }: { appName: string }) {
         <div className="text-text font-bold text-base tracking-tight">{appName}</div>
       </div>
 
-      <nav className="flex-1 px-2">
-        {nav.map((item) => (
-          <a
-            key={item.label}
-            href="#"
-            className={`block px-3 py-2 text-sm rounded ${
-              item.active
-                ? "bg-active text-text border-l-2 border-text"
-                : "text-text-secondary hover:text-text"
-            }`}
-          >
-            {item.label}
-          </a>
-        ))}
+      <nav className="flex-1 px-2 overflow-y-auto">
+        <NavItem to="/">Overview</NavItem>
 
         <div className="text-text-tertiary text-[10px] font-semibold uppercase tracking-wider px-3 mt-6 mb-2">
           Teams
         </div>
-        <div className="text-text-tertiary text-xs px-3 py-2">
-          (auto-populated after first sync)
-        </div>
+        {(teams?.teams ?? []).slice(0, 30).map((t) => (
+          <NavItem key={t.name} to={`/teams/${t.name}`}>
+            {t.name.split("/").pop()}
+          </NavItem>
+        ))}
+        {teams && teams.teams.length === 0 && (
+          <div className="text-text-tertiary text-xs px-3 py-2">
+            (waiting on first sync)
+          </div>
+        )}
       </nav>
 
       <div className="border-t border-border p-3 text-xs text-text-secondary">
         <SyncIndicator status={status} synced={synced} failed={!!failed} />
       </div>
     </aside>
+  );
+}
+
+function NavItem({ to, children }: { to: string; children: React.ReactNode }) {
+  return (
+    <NavLink
+      to={to}
+      end={to === "/"}
+      className={({ isActive }) =>
+        `block px-3 py-1.5 text-sm rounded ${
+          isActive
+            ? "bg-active text-text border-l-2 border-text"
+            : "text-text-secondary hover:text-text"
+        }`
+      }
+    >
+      {children}
+    </NavLink>
   );
 }
 

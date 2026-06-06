@@ -1,30 +1,10 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { useOrgMetrics } from "../api/client";
 import type { OrgMetrics } from "../api/types";
-import { CycleTimeBreakdown } from "../components/CycleTimeBreakdown";
-import { KpiCard } from "../components/KpiCard";
-import { MetricLineChart } from "../components/MetricLineChart";
+import { ChartCard, MetricsBody } from "../components/MetricsBody";
 import { PageHeader } from "../components/PageHeader";
 import { Sparkline } from "../components/Sparkline";
-
-const DEFS = {
-  deployFreq:
-    "Number of deployments per week. Source: tags matching DEPLOYMENT_TAG_PATTERN, or merges to DEPLOYMENT_BRANCH.",
-  leadTime:
-    "Median hours from the first commit in a PR to the PR being merged. Falls back to PR open time if commits are unavailable.",
-  cycleTime:
-    "Median hours from PR open to merge, broken into pickup (open→first review), review (first review→last approval), and merge phases.",
-  throughput:
-    "Number of merged PRs per week, excluding configured bots.",
-  prSize:
-    "Median lines changed (additions + deletions) per merged PR. Red when above LARGE_PR_THRESHOLD.",
-  reviewCoverage:
-    "Percent of merged PRs that received at least one review from a non-author.",
-  firstReview:
-    "Median hours from PR open to first review event from a non-author.",
-  aiAssisted:
-    "Percent of merged PRs detected as AI-assisted. Detection looks for Co-Authored-By trailers on the merge commit and known markers in the PR body (Claude, Cursor, Copilot, Codex, Windsurf). LOWER BOUND — devs who use AI but strip the trailers will not be counted.",
-};
 
 export function OrgOverview() {
   const [period, setPeriod] = useState("90d");
@@ -47,121 +27,14 @@ export function OrgOverview() {
 }
 
 function OverviewBody({ data }: { data: OrgMetrics }) {
-  const s = data.series;
-
-  const cards: Array<{
-    label: string;
-    definition: string;
-    kpiKey: keyof OrgMetrics["kpis"];
-    spark: (number | null)[];
-  }> = [
-    {
-      label: "Deployment Frequency",
-      definition: DEFS.deployFreq,
-      kpiKey: "deployment_frequency",
-      spark: s.deployment_frequency.slice(-8).map((p) => p.value),
-    },
-    {
-      label: "Lead Time",
-      definition: DEFS.leadTime,
-      kpiKey: "lead_time_p50",
-      spark: s.lead_time.slice(-8).map((p) => p.p50),
-    },
-    {
-      label: "PR Cycle Time",
-      definition: DEFS.cycleTime,
-      kpiKey: "pr_cycle_time",
-      spark: s.pr_cycle_time
-        .slice(-8)
-        .map((p) =>
-          p.pickup === null && p.review === null && p.merge === null
-            ? null
-            : (p.pickup ?? 0) + (p.review ?? 0) + (p.merge ?? 0),
-        ),
-    },
-    {
-      label: "PR Throughput",
-      definition: DEFS.throughput,
-      kpiKey: "pr_throughput",
-      spark: s.pr_throughput.slice(-8).map((p) => p.value),
-    },
-    {
-      label: "PR Size",
-      definition: DEFS.prSize,
-      kpiKey: "pr_size",
-      spark: s.pr_size.slice(-8).map((p) => p.value),
-    },
-    {
-      label: "Review Coverage",
-      definition: DEFS.reviewCoverage,
-      kpiKey: "review_coverage",
-      spark: s.review_coverage.slice(-8).map((p) => p.value),
-    },
-    {
-      label: "Time to First Review",
-      definition: DEFS.firstReview,
-      kpiKey: "time_to_first_review",
-      spark: s.time_to_first_review.slice(-8).map((p) => p.value),
-    },
-    {
-      label: "AI-Assisted",
-      definition: DEFS.aiAssisted,
-      kpiKey: "ai_assisted",
-      spark: s.ai_assisted.slice(-8).map((p) => p.value),
-    },
-  ];
-
   const aiTools = data.kpis.ai_assisted.tools ?? {};
   const aiToolsTotal = Object.values(aiTools).reduce((a, b) => a + b, 0);
 
   return (
     <>
-      <div className="grid grid-cols-4 gap-3 mb-6">
-        {cards.map((c) => {
-          const k = data.kpis[c.kpiKey];
-          return (
-            <KpiCard
-              key={c.kpiKey}
-              label={c.label}
-              definition={c.definition}
-              value={k.value}
-              unit={k.unit}
-              deltaPct={k.delta_pct}
-              badDirection={k.bad_direction}
-              spark={c.spark}
-              redWhenAbove={k.red_when_above}
-            />
-          );
-        })}
-      </div>
+      <MetricsBody data={data} linkPrefix="/metrics" />
 
-      <div className="grid grid-cols-2 gap-3 mb-6">
-        <ChartCard title="Deployment Frequency (weekly)">
-          <MetricLineChart
-            data={s.deployment_frequency.map((p) => ({
-              week: p.week,
-              Deploys: p.value,
-            }))}
-            series={[{ key: "Deploys", label: "Deploys" }]}
-            yLabel="per week"
-          />
-        </ChartCard>
-        <ChartCard title="Lead Time for Changes (weekly)">
-          <MetricLineChart
-            data={s.lead_time.map((p) => ({ week: p.week, P50: p.p50, P75: p.p75 }))}
-            series={[
-              { key: "P50", label: "P50" },
-              { key: "P75", label: "P75", dashed: true },
-            ]}
-            yLabel="hours"
-          />
-        </ChartCard>
-      </div>
-
-      <div className="grid grid-cols-2 gap-3 mb-6">
-        <ChartCard title="PR Cycle Time breakdown (weekly)">
-          <CycleTimeBreakdown data={s.pr_cycle_time} />
-        </ChartCard>
+      <div className="mb-6">
         <ChartCard title="AI tool breakdown (period total)">
           <AiToolsBreakdown tools={aiTools} total={aiToolsTotal} />
         </ChartCard>
@@ -169,15 +42,6 @@ function OverviewBody({ data }: { data: OrgMetrics }) {
 
       <TeamTable teams={data.teams} largePrThreshold={data.config.large_pr_threshold} />
     </>
-  );
-}
-
-function ChartCard({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div className="bg-card border border-border rounded p-4">
-      <div className="text-text font-medium text-[13px] mb-3">{title}</div>
-      {children}
-    </div>
   );
 }
 
@@ -190,7 +54,7 @@ function AiToolsBreakdown({
 }) {
   if (total === 0) {
     return (
-      <div className="h-[260px] flex items-center justify-center text-text-secondary text-sm text-center px-6">
+      <div className="h-[180px] flex items-center justify-center text-text-secondary text-sm text-center px-6">
         No AI-assisted PRs detected in this period.
         <br />
         <span className="text-text-tertiary text-xs mt-2 block">
@@ -202,7 +66,7 @@ function AiToolsBreakdown({
   const sorted = Object.entries(tools).sort((a, b) => b[1] - a[1]);
   const max = sorted[0][1];
   return (
-    <div className="flex flex-col gap-2 h-[260px] overflow-y-auto pr-2">
+    <div className="flex flex-col gap-2">
       {sorted.map(([tool, count]) => {
         const pct = (count / total) * 100;
         const width = (count / max) * 100;
@@ -215,11 +79,7 @@ function AiToolsBreakdown({
               </span>
             </div>
             <div className="h-2 bg-border-subtle rounded">
-              <div
-                className="h-2 bg-text rounded"
-                style={{ width: `${width}%` }}
-                aria-label={`${tool}: ${count}`}
-              />
+              <div className="h-2 bg-text rounded" style={{ width: `${width}%` }} />
             </div>
           </div>
         );
@@ -277,8 +137,15 @@ function TeamTable({
             const sizeIsLarge =
               t.median_pr_size_lines !== null && t.median_pr_size_lines > largePrThreshold;
             return (
-              <tr key={t.name} className="border-t border-border-subtle">
-                <td className="px-4 py-3 text-text">{t.name}</td>
+              <tr
+                key={t.name}
+                className="border-t border-border-subtle hover:bg-active cursor-pointer"
+              >
+                <td className="px-4 py-3 text-text">
+                  <Link to={`/teams/${t.name}`} className="block">
+                    {t.name}
+                  </Link>
+                </td>
                 <td className="px-4 py-3 text-right text-text">
                   {t.deploy_per_week.toFixed(1)}/wk
                 </td>

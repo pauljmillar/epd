@@ -1,6 +1,9 @@
-"""GET /api/v1/metrics/org — Org Overview data feed.
+"""GET /api/v1/metrics/{org|team|contributor} — dashboard data feeds.
 
-Returns 7 KPI values + weekly series + per-team breakdown (repo-as-team in v0).
+The heart of this module is `_compute_metrics(prs, deps, ...)`, a pure function that takes
+already-loaded PRs and deployments and produces the KPI + series payload. The three
+endpoints (`/org`, `/team/{name}`, `/contributor/{login}`) all delegate to it after loading
+their scoped slice of PRs.
 """
 from __future__ import annotations
 
@@ -8,15 +11,13 @@ import time
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 from threading import Lock
-from typing import Literal
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..db import get_session
-from .auth import require_auth
 from ..metrics import deployment_frequency as df
 from ..metrics import lead_time as lt
 from ..metrics import pr_cycle_time as ct
@@ -24,15 +25,16 @@ from ..metrics import pr_size as sz
 from ..metrics import review_coverage as rc
 from ..metrics import throughput as tp
 from ..metrics import time_to_first_review as ttfr
+from ..metrics.common import iso_week_start
 from ..models import Contributor, Deployment, PRCommit, PRReview, PullRequest, Repository
+from .auth import require_auth
 
-router = APIRouter(prefix="/api/v1/metrics", tags=["metrics"], dependencies=[Depends(require_auth)])
+router = APIRouter(
+    prefix="/api/v1/metrics", tags=["metrics"], dependencies=[Depends(require_auth)]
+)
 
-Period = Literal["30d", "90d", "6m"]
+# --- TTL cache ---------------------------------------------------------------
 
-# A3: in-process TTL cache. Data only changes once per night, so a 5-minute response cache is
-# very generous in freshness terms but is the bigger perf lever than snapshot reads at our
-# current scale (single-instance backend, no Redis).
 _CACHE_TTL_SECONDS = 300
 _cache: dict[str, tuple[float, dict]] = {}
 _cache_lock = Lock()
@@ -56,10 +58,12 @@ def _cache_put(key: str, payload: dict) -> None:
 
 
 def cache_invalidate_all() -> None:
-    """Called by the sync orchestrator after a successful sync so cached responses don't
-    serve stale data for up to 5 minutes after fresh data lands."""
+    """Called by the sync orchestrator after a successful sync."""
     with _cache_lock:
         _cache.clear()
+
+
+# --- Period helpers ----------------------------------------------------------
 
 
 def _period_days(p: str) -> int:
@@ -73,12 +77,39 @@ def _date_range(period: str) -> tuple[date, date]:
     return start, end
 
 
-def _load_period_prs(s: Session, start: date, end: date) -> list[dict]:
-    """All merged PRs in the period, with first-commit timestamp and review events attached.
+def _backfill_horizon(s: Session) -> date | None:
+    earliest_merged = s.execute(select(func.min(PullRequest.merged_at))).scalar()
+    explicit = datetime.now(timezone.utc).date() - timedelta(days=30 * settings.backfill_months)
+    if earliest_merged is None:
+        return explicit
+    return max(earliest_merged.date(), explicit)
 
-    Designed to avoid the N+1 trap: one query for PRs, one for the first-commit map, one for
-    all reviews. Reviews are then grouped in Python.
-    """
+
+def _delta_pct(current: float | None, prior: float | None) -> float | None:
+    if current is None or prior is None:
+        return None
+    if abs(prior) < 1e-6:
+        return None
+    return round(((current - prior) / prior) * 100.0, 1)
+
+
+def _round_or_none(v: float | None, ndigits: int = 2) -> float | None:
+    return round(v, ndigits) if v is not None else None
+
+
+# --- Loaders -----------------------------------------------------------------
+
+
+def _load_period_prs(
+    s: Session,
+    start: date,
+    end: date,
+    *,
+    repo_full_name: str | None = None,
+    author_login: str | None = None,
+) -> list[dict]:
+    """Load merged PRs in [start, end] with first-commit + reviews attached. Optionally
+    filtered to one repo and/or one author (filters compose)."""
     excluded = settings.excluded_user_set
 
     # First-commit per PR
@@ -88,26 +119,29 @@ def _load_period_prs(s: Session, start: date, end: date) -> list[dict]:
         if existing is None or row.authored_at < existing:
             commit_map[row.pr_id] = row.authored_at
 
-    # PRs in window
-    pr_rows = s.execute(
+    stmt = (
         select(PullRequest, Contributor.login, Repository.full_name)
         .join(Repository, PullRequest.repo_id == Repository.id)
         .outerjoin(Contributor, PullRequest.author_id == Contributor.id)
         .where(PullRequest.merged_at.is_not(None))
         .where(PullRequest.merged_at >= datetime.combine(start, datetime.min.time(), timezone.utc))
         .where(PullRequest.merged_at <= datetime.combine(end, datetime.max.time(), timezone.utc))
-    ).all()
+    )
+    if repo_full_name is not None:
+        stmt = stmt.where(Repository.full_name == repo_full_name)
+    if author_login is not None:
+        stmt = stmt.where(Contributor.login == author_login)
+
+    pr_rows = s.execute(stmt).all()
     pr_id_set = {pr.id for pr, _, _ in pr_rows}
 
-    # Reviews for those PRs — one query, group in memory
     reviews_by_pr: dict[int, list[dict]] = defaultdict(list)
     if pr_id_set:
-        rv_rows = s.execute(
+        for rv, reviewer_login in s.execute(
             select(PRReview, Contributor.login)
             .outerjoin(Contributor, PRReview.reviewer_id == Contributor.id)
             .where(PRReview.pr_id.in_(pr_id_set))
-        ).all()
-        for rv, reviewer_login in rv_rows:
+        ).all():
             reviews_by_pr[rv.pr_id].append(
                 {
                     "submitted_at": rv.submitted_at,
@@ -123,6 +157,9 @@ def _load_period_prs(s: Session, start: date, end: date) -> list[dict]:
         out.append(
             {
                 "id": pr.id,
+                "number": pr.number,
+                "title": pr.title,
+                "url": pr.url,
                 "opened_at": pr.opened_at,
                 "merged_at": pr.merged_at,
                 "first_commit_at": commit_map.get(pr.id),
@@ -138,81 +175,74 @@ def _load_period_prs(s: Session, start: date, end: date) -> list[dict]:
     return out
 
 
-def _load_period_deployments(s: Session, start: date, end: date) -> list[dict]:
+def _load_period_deployments(
+    s: Session, start: date, end: date, *, repo_full_name: str | None = None
+) -> list[dict]:
     stmt = (
         select(Deployment, Repository.full_name)
         .join(Repository, Deployment.repo_id == Repository.id)
         .where(Deployment.triggered_at >= datetime.combine(start, datetime.min.time(), timezone.utc))
         .where(Deployment.triggered_at <= datetime.combine(end, datetime.max.time(), timezone.utc))
     )
+    if repo_full_name is not None:
+        stmt = stmt.where(Repository.full_name == repo_full_name)
     return [
         {"triggered_at": d.triggered_at, "repo_full_name": full}
         for d, full in s.execute(stmt).all()
     ]
 
 
-def _delta_pct(current: float | None, prior: float | None) -> float | None:
-    """Return % change. None when either side is missing OR when prior is too small to be
-    meaningful (avoids the "+258,400% vs prior" effect on the first backfill)."""
-    if current is None or prior is None:
+# --- Aggregation -------------------------------------------------------------
+
+
+def _ai_pct(prs: list[dict]) -> float | None:
+    if not prs:
         return None
-    # If prior is essentially zero, % change is undefined — show None rather than ±inf.
-    if abs(prior) < 1e-6:
-        return None
-    return round(((current - prior) / prior) * 100.0, 1)
+    return round(100.0 * sum(1 for p in prs if p["ai_assisted"]) / len(prs), 1)
 
 
-def _round_or_none(v: float | None, ndigits: int = 2) -> float | None:
-    return round(v, ndigits) if v is not None else None
+def _ai_tools_count(prs: list[dict]) -> dict[str, int]:
+    counts: dict[str, int] = defaultdict(int)
+    for p in prs:
+        if p["ai_assisted"] and p["ai_tool"]:
+            counts[p["ai_tool"]] += 1
+    return dict(counts)
 
 
-def _backfill_horizon(s: Session) -> date | None:
-    """The honest 'we have no PR data before this date' boundary.
+def _ai_series_per_week(prs: list[dict], start: date, end: date) -> list[tuple[date, float | None]]:
+    buckets: dict[date, list[bool]] = defaultdict(list)
+    for pr in prs:
+        merged = pr["merged_at"]
+        if merged is None:
+            continue
+        w = iso_week_start(merged)
+        if start <= w <= end:
+            buckets[w].append(pr["ai_assisted"])
+    out: list[tuple[date, float | None]] = []
+    cur = iso_week_start(start)
+    last_w = iso_week_start(end)
+    while cur <= last_w:
+        vals = buckets.get(cur, [])
+        out.append((cur, round(100.0 * sum(vals) / len(vals), 1) if vals else None))
+        cur = cur + timedelta(days=7)
+    return out
 
-    Approach: take max(earliest_merged_at, today - BACKFILL_MONTHS). `opened_at` is unreliable
-    because long-running PRs may have opened_at from before the sync window. `merged_at` is
-    the date the PR data actually counts toward metrics.
-    """
-    earliest_merged = s.execute(select(func.min(PullRequest.merged_at))).scalar()
-    explicit = datetime.now(timezone.utc).date() - timedelta(days=30 * settings.backfill_months)
-    if earliest_merged is None:
-        return explicit
-    return max(earliest_merged.date(), explicit)
 
-
-@router.get("/org")
-def org_metrics(
-    period: str = Query("90d"),
-    s: Session = Depends(get_session),
+def _compute_kpis(
+    cur_prs: list[dict],
+    cur_deps: list[dict],
+    prior_prs: list[dict] | None,
+    prior_deps: list[dict] | None,
+    start: date,
+    end: date,
+    prior_start: date,
+    prior_end: date,
 ) -> dict:
-    cache_key = f"org:{period}"
-    cached = _cache_get(cache_key)
-    if cached is not None:
-        return cached
-    payload = _build_org_metrics(period, s)
-    _cache_put(cache_key, payload)
-    return payload
-
-
-def _build_org_metrics(period: str, s: Session) -> dict:
-    start, end = _date_range(period)
-    prior_start = start - (end - start)
-    prior_end = start
-
-    # A1: if the prior window predates the backfill horizon, treat priors as missing rather
-    # than near-zero. Avoids the "+258,400% vs prior" effect on the first sync.
-    horizon = _backfill_horizon(s)
-    prior_is_valid = horizon is None or prior_start >= horizon
-
-    cur_prs = _load_period_prs(s, start, end)
-    prior_prs = _load_period_prs(s, prior_start, prior_end) if prior_is_valid else []
-    cur_deps = _load_period_deployments(s, start, end)
-    prior_deps = _load_period_deployments(s, prior_start, prior_end) if prior_is_valid else []
-
+    """Return the kpis + series + counts payload for an arbitrary set of PRs/deps."""
     weeks_in_period = max(1, (end - start).days // 7)
     weeks_in_prior = max(1, (prior_end - prior_start).days // 7)
 
-    # Aggregates — current
+    # Current
     deploy_per_week = len(cur_deps) / weeks_in_period
     throughput_per_week = len(cur_prs) / weeks_in_period
     cur_lt_p50, cur_lt_p75 = lt.aggregate(cur_prs)
@@ -221,26 +251,11 @@ def _build_org_metrics(period: str, s: Session) -> dict:
     cur_cov = rc.aggregate(cur_prs)
     cur_ttfr = ttfr.aggregate(cur_prs)
     cur_large_count = sz.count_large(cur_prs, settings.large_pr_threshold)
-
-    # AI attribution — % of merged PRs flagged as AI-assisted + per-tool counts.
-    def _ai_pct(prs: list[dict]) -> float | None:
-        if not prs:
-            return None
-        return round(100.0 * sum(1 for p in prs if p["ai_assisted"]) / len(prs), 1)
-
-    def _ai_tools_count(prs: list[dict]) -> dict[str, int]:
-        counts: dict[str, int] = defaultdict(int)
-        for p in prs:
-            if p["ai_assisted"] and p["ai_tool"]:
-                counts[p["ai_tool"]] += 1
-        return dict(counts)
-
     cur_ai_pct = _ai_pct(cur_prs)
     cur_ai_tools = _ai_tools_count(cur_prs)
 
-    # Aggregates — prior (for deltas). When the prior window predates backfill, pass None so
-    # _delta_pct returns null and the UI shows "— no prior data" instead of a junk percentage.
-    if prior_is_valid:
+    # Prior — None when prior window is invalid
+    if prior_prs is not None and prior_deps is not None:
         deploy_per_week_prior: float | None = len(prior_deps) / weeks_in_prior
         throughput_per_week_prior: float | None = len(prior_prs) / weeks_in_prior
         prior_lt_p50, _ = lt.aggregate(prior_prs)
@@ -259,7 +274,7 @@ def _build_org_metrics(period: str, s: Session) -> dict:
         prior_ttfr = None
         prior_ai_pct = None
 
-    # Weekly series
+    # Series
     df_series = df.per_week(cur_deps, start, end)
     lt_series = lt.per_week(cur_prs, start, end)
     tp_series = tp.per_week(cur_prs, start, end)
@@ -267,66 +282,9 @@ def _build_org_metrics(period: str, s: Session) -> dict:
     sz_series = sz.per_week(cur_prs, start, end)
     rc_series = rc.per_week(cur_prs, start, end)
     ttfr_series = ttfr.per_week(cur_prs, start, end)
-
-    # AI-assisted weekly series (% of merged PRs per week with ai_assisted=True)
-    ai_buckets: dict[date, list[bool]] = defaultdict(list)
-    for pr in cur_prs:
-        from .. import metrics as _m  # late import to avoid cycle
-        from ..metrics.common import iso_week_start as _iws
-
-        merged = pr["merged_at"]
-        if merged is None:
-            continue
-        w = _iws(merged)
-        if start <= w <= end:
-            ai_buckets[w].append(pr["ai_assisted"])
-
-    from datetime import timedelta as _td
-
-    from ..metrics.common import iso_week_start
-
-    ai_series: list[tuple[date, float | None]] = []
-    cur = iso_week_start(start)
-    last_w = iso_week_start(end)
-    while cur <= last_w:
-        vals = ai_buckets.get(cur, [])
-        ai_series.append(
-            (cur, round(100.0 * sum(vals) / len(vals), 1) if vals else None)
-        )
-        cur = cur + _td(days=7)
-
-    # Per-repo (pseudo-team) breakdown
-    by_repo: dict[str, list[dict]] = {}
-    for pr in cur_prs:
-        by_repo.setdefault(pr["repo_full_name"], []).append(pr)
-    deps_by_repo: dict[str, list[dict]] = {}
-    for d in cur_deps:
-        deps_by_repo.setdefault(d["repo_full_name"], []).append(d)
-
-    teams = []
-    for repo, prs in sorted(by_repo.items()):
-        p50, _ = lt.aggregate(prs)
-        teams.append(
-            {
-                "name": repo,
-                "prs_merged": len(prs),
-                "throughput_per_week": round(len(prs) / weeks_in_period, 2),
-                "deploy_per_week": round(
-                    len(deps_by_repo.get(repo, [])) / weeks_in_period, 2
-                ),
-                "lead_time_p50_hours": _round_or_none(p50),
-                "pr_cycle_time_hours": _round_or_none(ct.aggregate(prs)["total_p50"]),
-                "median_pr_size_lines": _round_or_none(sz.aggregate(prs)),
-                "review_coverage_pct": _round_or_none(rc.aggregate(prs)),
-                "time_to_first_review_hours": _round_or_none(ttfr.aggregate(prs)),
-                "ai_assisted_pct": _ai_pct(prs),
-            }
-        )
+    ai_series = _ai_series_per_week(cur_prs, start, end)
 
     return {
-        "period": period,
-        "range": {"start": start.isoformat(), "end": end.isoformat()},
-        "config": {"large_pr_threshold": settings.large_pr_threshold},
         "counts": {
             "merged_prs": len(cur_prs),
             "deployments": len(cur_deps),
@@ -386,15 +344,12 @@ def _build_org_metrics(period: str, s: Session) -> dict:
                 "value": cur_ai_pct,
                 "unit": "pct",
                 "delta_pct": _delta_pct(cur_ai_pct, prior_ai_pct),
-                # No "bad direction" — this is informational, not a value judgment.
                 "bad_direction": None,
                 "tools": cur_ai_tools,
             },
         },
         "series": {
-            "deployment_frequency": [
-                {"week": w.isoformat(), "value": v} for w, v in df_series
-            ],
+            "deployment_frequency": [{"week": w.isoformat(), "value": v} for w, v in df_series],
             "lead_time": [
                 {
                     "week": w.isoformat(),
@@ -424,5 +379,305 @@ def _build_org_metrics(period: str, s: Session) -> dict:
             ],
             "ai_assisted": [{"week": w.isoformat(), "value": v} for w, v in ai_series],
         },
-        "teams": teams,
     }
+
+
+def _notable_prs_by_lead_time(prs: list[dict], n: int = 5) -> list[dict]:
+    """Top N PRs by longest lead time (first_commit → merge)."""
+    with_lt: list[tuple[float, dict]] = []
+    for pr in prs:
+        lt_hours = lt.lead_time_hours(pr)
+        if lt_hours is not None:
+            with_lt.append((lt_hours, pr))
+    with_lt.sort(key=lambda t: -t[0])
+    out = []
+    for lt_hours, pr in with_lt[:n]:
+        out.append(
+            {
+                "number": pr["number"],
+                "title": pr["title"],
+                "url": pr["url"],
+                "repo": pr["repo_full_name"],
+                "author": pr["author_login"],
+                "lead_time_hours": round(lt_hours, 2),
+            }
+        )
+    return out
+
+
+# --- Endpoints ---------------------------------------------------------------
+
+
+@router.get("/org")
+def org_metrics(
+    period: str = Query("90d"),
+    s: Session = Depends(get_session),
+) -> dict:
+    cache_key = f"org:{period}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    start, end = _date_range(period)
+    prior_start = start - (end - start)
+    prior_end = start
+    horizon = _backfill_horizon(s)
+    prior_is_valid = horizon is None or prior_start >= horizon
+
+    cur_prs = _load_period_prs(s, start, end)
+    cur_deps = _load_period_deployments(s, start, end)
+    if prior_is_valid:
+        prior_prs = _load_period_prs(s, prior_start, prior_end)
+        prior_deps = _load_period_deployments(s, prior_start, prior_end)
+    else:
+        prior_prs = None
+        prior_deps = None
+
+    payload = _compute_kpis(cur_prs, cur_deps, prior_prs, prior_deps, start, end, prior_start, prior_end)
+    payload["period"] = period
+    payload["range"] = {"start": start.isoformat(), "end": end.isoformat()}
+    payload["config"] = {"large_pr_threshold": settings.large_pr_threshold}
+    payload["notable_prs"] = {"lead_time": _notable_prs_by_lead_time(cur_prs)}
+
+    # Per-repo (pseudo-team) breakdown
+    weeks_in_period = max(1, (end - start).days // 7)
+    by_repo: dict[str, list[dict]] = {}
+    for pr in cur_prs:
+        by_repo.setdefault(pr["repo_full_name"], []).append(pr)
+    deps_by_repo: dict[str, list[dict]] = {}
+    for d in cur_deps:
+        deps_by_repo.setdefault(d["repo_full_name"], []).append(d)
+
+    teams = []
+    for repo, prs in sorted(by_repo.items()):
+        p50, _ = lt.aggregate(prs)
+        teams.append(
+            {
+                "name": repo,
+                "prs_merged": len(prs),
+                "throughput_per_week": round(len(prs) / weeks_in_period, 2),
+                "deploy_per_week": round(len(deps_by_repo.get(repo, [])) / weeks_in_period, 2),
+                "lead_time_p50_hours": _round_or_none(p50),
+                "pr_cycle_time_hours": _round_or_none(ct.aggregate(prs)["total_p50"]),
+                "median_pr_size_lines": _round_or_none(sz.aggregate(prs)),
+                "review_coverage_pct": _round_or_none(rc.aggregate(prs)),
+                "time_to_first_review_hours": _round_or_none(ttfr.aggregate(prs)),
+                "ai_assisted_pct": _ai_pct(prs),
+            }
+        )
+    payload["teams"] = teams
+
+    _cache_put(cache_key, payload)
+    return payload
+
+
+@router.get("/team/{team_name:path}")
+def team_metrics(
+    team_name: str,
+    period: str = Query("90d"),
+    s: Session = Depends(get_session),
+) -> dict:
+    cache_key = f"team:{team_name}:{period}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    # Verify team exists (in v0 = repo with this full_name)
+    exists = s.execute(
+        select(Repository.id).where(Repository.full_name == team_name)
+    ).first()
+    if not exists:
+        raise HTTPException(404, f"Team (repo) {team_name!r} not found")
+
+    start, end = _date_range(period)
+    prior_start = start - (end - start)
+    prior_end = start
+    horizon = _backfill_horizon(s)
+    prior_is_valid = horizon is None or prior_start >= horizon
+
+    cur_prs = _load_period_prs(s, start, end, repo_full_name=team_name)
+    cur_deps = _load_period_deployments(s, start, end, repo_full_name=team_name)
+    if prior_is_valid:
+        prior_prs = _load_period_prs(s, prior_start, prior_end, repo_full_name=team_name)
+        prior_deps = _load_period_deployments(s, prior_start, prior_end, repo_full_name=team_name)
+    else:
+        prior_prs = None
+        prior_deps = None
+
+    payload = _compute_kpis(cur_prs, cur_deps, prior_prs, prior_deps, start, end, prior_start, prior_end)
+    payload["period"] = period
+    payload["range"] = {"start": start.isoformat(), "end": end.isoformat()}
+    payload["config"] = {"large_pr_threshold": settings.large_pr_threshold}
+    payload["team"] = {"name": team_name}
+    payload["notable_prs"] = {"lead_time": _notable_prs_by_lead_time(cur_prs)}
+
+    # Contributor context table — per-author stats inside this team
+    weeks_in_period = max(1, (end - start).days // 7)
+    by_author: dict[str, list[dict]] = {}
+    for pr in cur_prs:
+        login = pr["author_login"]
+        if login:
+            by_author.setdefault(login, []).append(pr)
+    contributors = []
+    for login, prs in sorted(by_author.items(), key=lambda t: -len(t[1])):
+        p50, _ = lt.aggregate(prs)
+        contributors.append(
+            {
+                "login": login,
+                "prs_merged": len(prs),
+                "throughput_per_week": round(len(prs) / weeks_in_period, 2),
+                "lead_time_p50_hours": _round_or_none(p50),
+                "pr_cycle_time_hours": _round_or_none(ct.aggregate(prs)["total_p50"]),
+                "median_pr_size_lines": _round_or_none(sz.aggregate(prs)),
+                "review_coverage_pct": _round_or_none(rc.aggregate(prs)),
+                "time_to_first_review_hours": _round_or_none(ttfr.aggregate(prs)),
+                "ai_assisted_pct": _ai_pct(prs),
+            }
+        )
+    payload["contributors"] = contributors
+
+    _cache_put(cache_key, payload)
+    return payload
+
+
+@router.get("/contributor/{login}")
+def contributor_metrics(
+    login: str,
+    period: str = Query("90d"),
+    s: Session = Depends(get_session),
+) -> dict:
+    cache_key = f"contributor:{login}:{period}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    exists = s.execute(select(Contributor.id).where(Contributor.login == login)).first()
+    if not exists:
+        raise HTTPException(404, f"Contributor {login!r} not found")
+
+    start, end = _date_range(period)
+    prior_start = start - (end - start)
+    prior_end = start
+    horizon = _backfill_horizon(s)
+    prior_is_valid = horizon is None or prior_start >= horizon
+
+    cur_prs = _load_period_prs(s, start, end, author_login=login)
+    if prior_is_valid:
+        prior_prs = _load_period_prs(s, prior_start, prior_end, author_login=login)
+    else:
+        prior_prs = None
+    # Contributors don't "own" deployments; use empty lists so the deploy KPI is 0/null.
+    cur_deps: list[dict] = []
+    prior_deps_arg = [] if prior_is_valid else None
+
+    payload = _compute_kpis(cur_prs, cur_deps, prior_prs, prior_deps_arg, start, end, prior_start, prior_end)
+    payload["period"] = period
+    payload["range"] = {"start": start.isoformat(), "end": end.isoformat()}
+    payload["config"] = {"large_pr_threshold": settings.large_pr_threshold}
+    payload["contributor"] = {"login": login}
+
+    # "Vs team median" context: for each repo this contributor touched, compute the team
+    # aggregates and average them weighted by PR count. Honest comparison since teams=repos.
+    repos_touched = {pr["repo_full_name"] for pr in cur_prs}
+    team_prs: list[dict] = []
+    for repo in repos_touched:
+        team_prs.extend(_load_period_prs(s, start, end, repo_full_name=repo))
+    team_lt_p50, _ = lt.aggregate(team_prs)
+    payload["team_median"] = {
+        "lead_time_p50_hours": _round_or_none(team_lt_p50),
+        "pr_cycle_time_hours": _round_or_none(ct.aggregate(team_prs)["total_p50"]),
+        "median_pr_size_lines": _round_or_none(sz.aggregate(team_prs)),
+        "review_coverage_pct": _round_or_none(rc.aggregate(team_prs)),
+        "time_to_first_review_hours": _round_or_none(ttfr.aggregate(team_prs)),
+        "prs_merged": len(team_prs),
+    }
+
+    # Recent PRs — last 20 merged
+    recent = sorted(cur_prs, key=lambda p: p["merged_at"], reverse=True)[:20]
+    payload["recent_prs"] = [
+        {
+            "number": pr["number"],
+            "title": pr["title"],
+            "url": pr["url"],
+            "repo": pr["repo_full_name"],
+            "merged_at": pr["merged_at"].isoformat() if pr["merged_at"] else None,
+            "additions": pr["additions"],
+            "deletions": pr["deletions"],
+            "lead_time_hours": _round_or_none(lt.lead_time_hours(pr)),
+            "ai_assisted": pr["ai_assisted"],
+            "ai_tool": pr["ai_tool"],
+        }
+        for pr in recent
+    ]
+
+    _cache_put(cache_key, payload)
+    return payload
+
+
+@router.get("/teams")
+def list_teams(s: Session = Depends(get_session)) -> dict:
+    """List teams (repos in v0) with PR count over the last 90d for sidebar ordering."""
+    cache_key = "teams_list"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    start, end = _date_range("90d")
+    rows = s.execute(
+        select(
+            Repository.full_name,
+            func.count(PullRequest.id).label("prs"),
+        )
+        .outerjoin(
+            PullRequest,
+            (PullRequest.repo_id == Repository.id)
+            & (PullRequest.merged_at.is_not(None))
+            & (PullRequest.merged_at >= datetime.combine(start, datetime.min.time(), timezone.utc)),
+        )
+        .group_by(Repository.full_name)
+        .order_by(func.count(PullRequest.id).desc())
+    ).all()
+    payload = {"teams": [{"name": full, "prs_merged_90d": int(prs)} for full, prs in rows]}
+    _cache_put(cache_key, payload)
+    return payload
+
+
+@router.get("/contributors")
+def list_contributors(
+    team: str | None = Query(None),
+    limit: int = Query(50, le=200),
+    s: Session = Depends(get_session),
+) -> dict:
+    """List contributors ordered by 90-day PR count. Optional team= filter."""
+    cache_key = f"contributors_list:{team}:{limit}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    start, _end = _date_range("90d")
+    stmt = (
+        select(Contributor.login, Contributor.display_name, func.count(PullRequest.id).label("prs"))
+        .join(PullRequest, PullRequest.author_id == Contributor.id)
+        .where(PullRequest.merged_at.is_not(None))
+        .where(PullRequest.merged_at >= datetime.combine(start, datetime.min.time(), timezone.utc))
+        .group_by(Contributor.login, Contributor.display_name)
+        .order_by(func.count(PullRequest.id).desc())
+        .limit(limit)
+    )
+    if team is not None:
+        stmt = stmt.join(Repository, PullRequest.repo_id == Repository.id).where(
+            Repository.full_name == team
+        )
+    rows = s.execute(stmt).all()
+    payload = {
+        "contributors": [
+            {
+                "login": login,
+                "display_name": display_name or login,
+                "prs_merged_90d": int(prs),
+            }
+            for login, display_name, prs in rows
+        ]
+    }
+    _cache_put(cache_key, payload)
+    return payload

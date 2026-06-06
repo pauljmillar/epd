@@ -58,6 +58,7 @@ export interface OrgMetrics {
     time_to_first_review_hours: number | null;
     ai_assisted_pct: number | null;
   }[];
+  notable_prs?: { lead_time: NotablePR[] };
 }
 
 export interface SyncStatus {
@@ -67,4 +68,64 @@ export interface SyncStatus {
   repos_synced?: number;
   prs_synced?: number;
   error?: string | null;
+}
+
+export interface NotablePR {
+  number: number;
+  title: string;
+  url: string;
+  repo: string;
+  author: string | null;
+  lead_time_hours: number;
+}
+
+export interface BaseMetrics {
+  period: string;
+  range: { start: string; end: string };
+  config: { large_pr_threshold: number };
+  counts: { merged_prs: number; deployments: number; large_prs: number };
+  kpis: OrgMetrics["kpis"];
+  series: OrgMetrics["series"];
+  notable_prs?: { lead_time: NotablePR[] };
+}
+
+export interface TeamMetrics extends BaseMetrics {
+  team: { name: string };
+  contributors: {
+    login: string;
+    prs_merged: number;
+    throughput_per_week: number;
+    lead_time_p50_hours: number | null;
+    pr_cycle_time_hours: number | null;
+    median_pr_size_lines: number | null;
+    review_coverage_pct: number | null;
+    time_to_first_review_hours: number | null;
+    ai_assisted_pct: number | null;
+  }[];
+}
+
+export interface RecentPR {
+  number: number;
+  title: string;
+  url: string;
+  repo: string;
+  merged_at: string | null;
+  additions: number;
+  deletions: number;
+  lead_time_hours: number | null;
+  ai_assisted: boolean;
+  ai_tool: string | null;
+}
+
+export interface ContributorMetrics extends BaseMetrics {
+  contributor: { login: string };
+  team_median: {
+    lead_time_p50_hours: number | null;
+    pr_cycle_time_hours: number | null;
+    median_pr_size_lines: number | null;
+    review_coverage_pct: number | null;
+    time_to_first_review_hours: number | null;
+    prs_merged: number;
+  };
+  recent_prs: RecentPR[];
 }

@@ -1,3 +1,4 @@
+import { Link } from "react-router-dom";
 import type { BadDirection } from "../api/types";
 import { DeltaText } from "./DeltaText";
 import { Sparkline } from "./Sparkline";
@@ -18,6 +19,8 @@ interface Props {
   spark: (number | null)[];
   /** If set, the stat value renders red when value > redWhenAbove (BRD §9.5 PR Size). */
   redWhenAbove?: number;
+  /** Optional in-app navigation target. If provided, the card becomes a link. */
+  to?: string;
   onClick?: () => void;
 }
 
@@ -47,17 +50,14 @@ export function KpiCard({
   badDirection,
   spark,
   redWhenAbove,
+  to,
   onClick,
 }: Props) {
   const valueIsAlert =
     redWhenAbove !== undefined && value !== null && value > redWhenAbove;
 
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="text-left bg-card border border-border rounded p-4 w-full hover:border-text-tertiary transition-colors"
-    >
+  const inner = (
+    <>
       <div className="flex items-start justify-between">
         <span className="text-text-secondary text-[11px] font-semibold uppercase tracking-wider">
           {label}
@@ -77,6 +77,21 @@ export function KpiCard({
         <DeltaText pct={deltaPct} badDirection={badDirection} />
         <Sparkline values={spark} />
       </div>
+    </>
+  );
+
+  const cls =
+    "text-left bg-card border border-border rounded p-4 w-full block hover:border-text-tertiary transition-colors";
+  if (to) {
+    return (
+      <Link to={to} className={cls}>
+        {inner}
+      </Link>
+    );
+  }
+  return (
+    <button type="button" onClick={onClick} className={cls}>
+      {inner}
     </button>
   );
 }
