@@ -213,6 +213,11 @@ async def run_sync() -> dict:
 
     rebuild_current_period()
 
+    # Invalidate the API response cache so the next dashboard request sees fresh data.
+    from .api.metrics import cache_invalidate_all
+
+    cache_invalidate_all()
+
     return {
         "status": "failed" if err else "completed",
         "repos_synced": repos_synced,

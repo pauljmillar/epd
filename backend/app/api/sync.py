@@ -3,12 +3,13 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 from ..snapshots import last_sync_status
 from ..sync import run_sync
+from .auth import require_auth
 
-router = APIRouter(prefix="/api/v1/sync", tags=["sync"])
+router = APIRouter(prefix="/api/v1/sync", tags=["sync"], dependencies=[Depends(require_auth)])
 
 _trigger_lock = asyncio.Lock()
 _last_triggered: float = 0.0

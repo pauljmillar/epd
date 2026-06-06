@@ -4,16 +4,19 @@ Returns 7 KPI values + weekly series + per-team breakdown (repo-as-team in v0).
 """
 from __future__ import annotations
 
+import time
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
+from threading import Lock
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..db import get_session
+from .auth import require_auth
 from ..metrics import deployment_frequency as df
 from ..metrics import lead_time as lt
 from ..metrics import pr_cycle_time as ct
@@ -23,9 +26,40 @@ from ..metrics import throughput as tp
 from ..metrics import time_to_first_review as ttfr
 from ..models import Contributor, Deployment, PRCommit, PRReview, PullRequest, Repository
 
-router = APIRouter(prefix="/api/v1/metrics", tags=["metrics"])
+router = APIRouter(prefix="/api/v1/metrics", tags=["metrics"], dependencies=[Depends(require_auth)])
 
 Period = Literal["30d", "90d", "6m"]
+
+# A3: in-process TTL cache. Data only changes once per night, so a 5-minute response cache is
+# very generous in freshness terms but is the bigger perf lever than snapshot reads at our
+# current scale (single-instance backend, no Redis).
+_CACHE_TTL_SECONDS = 300
+_cache: dict[str, tuple[float, dict]] = {}
+_cache_lock = Lock()
+
+
+def _cache_get(key: str) -> dict | None:
+    with _cache_lock:
+        entry = _cache.get(key)
+        if entry is None:
+            return None
+        ts, payload = entry
+        if time.time() - ts > _CACHE_TTL_SECONDS:
+            del _cache[key]
+            return None
+        return payload
+
+
+def _cache_put(key: str, payload: dict) -> None:
+    with _cache_lock:
+        _cache[key] = (time.time(), payload)
+
+
+def cache_invalidate_all() -> None:
+    """Called by the sync orchestrator after a successful sync so cached responses don't
+    serve stale data for up to 5 minutes after fresh data lands."""
+    with _cache_lock:
+        _cache.clear()
 
 
 def _period_days(p: str) -> int:
@@ -130,19 +164,40 @@ def _round_or_none(v: float | None, ndigits: int = 2) -> float | None:
     return round(v, ndigits) if v is not None else None
 
 
+def _earliest_pr_date(s: Session) -> date | None:
+    """Earliest opened_at across all synced PRs — the 'backfill horizon'."""
+    val = s.execute(select(func.min(PullRequest.opened_at))).scalar()
+    return val.date() if val else None
+
+
 @router.get("/org")
 def org_metrics(
     period: str = Query("90d"),
     s: Session = Depends(get_session),
 ) -> dict:
+    cache_key = f"org:{period}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+    payload = _build_org_metrics(period, s)
+    _cache_put(cache_key, payload)
+    return payload
+
+
+def _build_org_metrics(period: str, s: Session) -> dict:
     start, end = _date_range(period)
     prior_start = start - (end - start)
     prior_end = start
 
+    # A1: if the prior window predates the backfill horizon, treat priors as missing rather
+    # than near-zero. Avoids the "+258,400% vs prior" effect on the first sync.
+    horizon = _earliest_pr_date(s)
+    prior_is_valid = horizon is None or prior_start >= horizon
+
     cur_prs = _load_period_prs(s, start, end)
-    prior_prs = _load_period_prs(s, prior_start, prior_end)
+    prior_prs = _load_period_prs(s, prior_start, prior_end) if prior_is_valid else []
     cur_deps = _load_period_deployments(s, start, end)
-    prior_deps = _load_period_deployments(s, prior_start, prior_end)
+    prior_deps = _load_period_deployments(s, prior_start, prior_end) if prior_is_valid else []
 
     weeks_in_period = max(1, (end - start).days // 7)
     weeks_in_prior = max(1, (prior_end - prior_start).days // 7)
@@ -157,14 +212,24 @@ def org_metrics(
     cur_ttfr = ttfr.aggregate(cur_prs)
     cur_large_count = sz.count_large(cur_prs, settings.large_pr_threshold)
 
-    # Aggregates — prior (for deltas)
-    deploy_per_week_prior = len(prior_deps) / weeks_in_prior
-    throughput_per_week_prior = len(prior_prs) / weeks_in_prior
-    prior_lt_p50, _ = lt.aggregate(prior_prs)
-    prior_ct = ct.aggregate(prior_prs)
-    prior_size = sz.aggregate(prior_prs)
-    prior_cov = rc.aggregate(prior_prs)
-    prior_ttfr = ttfr.aggregate(prior_prs)
+    # Aggregates — prior (for deltas). When the prior window predates backfill, pass None so
+    # _delta_pct returns null and the UI shows "— no prior data" instead of a junk percentage.
+    if prior_is_valid:
+        deploy_per_week_prior: float | None = len(prior_deps) / weeks_in_prior
+        throughput_per_week_prior: float | None = len(prior_prs) / weeks_in_prior
+        prior_lt_p50, _ = lt.aggregate(prior_prs)
+        prior_ct = ct.aggregate(prior_prs)
+        prior_size = sz.aggregate(prior_prs)
+        prior_cov = rc.aggregate(prior_prs)
+        prior_ttfr = ttfr.aggregate(prior_prs)
+    else:
+        deploy_per_week_prior = None
+        throughput_per_week_prior = None
+        prior_lt_p50 = None
+        prior_ct = {"total_p50": None, "pickup_p50": None, "review_p50": None, "merge_p50": None}
+        prior_size = None
+        prior_cov = None
+        prior_ttfr = None
 
     # Weekly series
     df_series = df.per_week(cur_deps, start, end)
