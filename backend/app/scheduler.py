@@ -16,9 +16,13 @@ log = logging.getLogger(__name__)
 scheduler: BackgroundScheduler | None = None
 
 
-def _has_any_sync() -> bool:
+def _has_successful_sync() -> bool:
+    """Only completed syncs count — a failed first run shouldn't disable auto-backfill."""
     with session_scope() as s:
-        return s.execute(select(SyncLog.id).limit(1)).first() is not None
+        return (
+            s.execute(select(SyncLog.id).where(SyncLog.status == "completed").limit(1)).first()
+            is not None
+        )
 
 
 def start() -> None:
@@ -37,9 +41,9 @@ def start() -> None:
     scheduler.start()
     log.info("Scheduler started")
 
-    # First-run backfill
-    if not _has_any_sync():
-        log.info("No prior sync detected; scheduling initial backfill")
+    # First-run backfill (also re-runs if every prior attempt failed)
+    if not _has_successful_sync():
+        log.info("No successful prior sync detected; scheduling initial backfill")
         scheduler.add_job(run_sync_sync, id="initial_backfill")
 
 
