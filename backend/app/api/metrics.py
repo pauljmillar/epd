@@ -164,10 +164,18 @@ def _round_or_none(v: float | None, ndigits: int = 2) -> float | None:
     return round(v, ndigits) if v is not None else None
 
 
-def _earliest_pr_date(s: Session) -> date | None:
-    """Earliest opened_at across all synced PRs — the 'backfill horizon'."""
-    val = s.execute(select(func.min(PullRequest.opened_at))).scalar()
-    return val.date() if val else None
+def _backfill_horizon(s: Session) -> date | None:
+    """The honest 'we have no PR data before this date' boundary.
+
+    Approach: take max(earliest_merged_at, today - BACKFILL_MONTHS). `opened_at` is unreliable
+    because long-running PRs may have opened_at from before the sync window. `merged_at` is
+    the date the PR data actually counts toward metrics.
+    """
+    earliest_merged = s.execute(select(func.min(PullRequest.merged_at))).scalar()
+    explicit = datetime.now(timezone.utc).date() - timedelta(days=30 * settings.backfill_months)
+    if earliest_merged is None:
+        return explicit
+    return max(earliest_merged.date(), explicit)
 
 
 @router.get("/org")
@@ -191,7 +199,7 @@ def _build_org_metrics(period: str, s: Session) -> dict:
 
     # A1: if the prior window predates the backfill horizon, treat priors as missing rather
     # than near-zero. Avoids the "+258,400% vs prior" effect on the first sync.
-    horizon = _earliest_pr_date(s)
+    horizon = _backfill_horizon(s)
     prior_is_valid = horizon is None or prior_start >= horizon
 
     cur_prs = _load_period_prs(s, start, end)
