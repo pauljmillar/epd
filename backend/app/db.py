@@ -8,7 +8,15 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from .config import settings
 
-engine = create_engine(settings.database_url, pool_pre_ping=True, future=True)
+# `prepare_threshold=None` disables psycopg's prepared statements, which is required when
+# connecting through the Supabase / pgbouncer transaction pooler (port 6543). Harmless when
+# pointed at a regular Postgres on port 5432.
+engine = create_engine(
+    settings.database_url,
+    pool_pre_ping=True,
+    future=True,
+    connect_args={"prepare_threshold": None},
+)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
 
 
