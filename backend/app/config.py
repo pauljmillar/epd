@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     deployment_tag_pattern: str | None = None
     large_pr_threshold: int = 400
 
+    # AI-tool attribution: JSON-encoded {"tool_name": ["regex", ...]} override of defaults
+    # (see app/ai_attribution.py). Set to "" or unset for the bundled patterns.
+    ai_tool_patterns: str | None = None
+
     # Optional auth
     admin_password: str | None = None
 

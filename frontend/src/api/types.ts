@@ -12,6 +12,8 @@ export interface Kpi {
     review_p50: number | null;
     merge_p50: number | null;
   };
+  /** AI tool name → PR count (only on the ai_assisted KPI). */
+  tools?: Record<string, number>;
 }
 
 export interface OrgMetrics {
@@ -27,6 +29,7 @@ export interface OrgMetrics {
     pr_size: Kpi;
     review_coverage: Kpi;
     time_to_first_review: Kpi;
+    ai_assisted: Kpi;
   };
   series: {
     deployment_frequency: { week: string; value: number }[];
@@ -41,6 +44,7 @@ export interface OrgMetrics {
     pr_size: { week: string; value: number | null }[];
     review_coverage: { week: string; value: number | null }[];
     time_to_first_review: { week: string; value: number | null }[];
+    ai_assisted: { week: string; value: number | null }[];
   };
   teams: {
     name: string;
@@ -52,6 +56,7 @@ export interface OrgMetrics {
     median_pr_size_lines: number | null;
     review_coverage_pct: number | null;
     time_to_first_review_hours: number | null;
+    ai_assisted_pct: number | null;
   }[];
 }
 

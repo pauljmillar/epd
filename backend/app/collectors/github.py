@@ -47,6 +47,8 @@ class PRRecord:
     is_draft: bool
     first_commit_at: datetime | None
     reviews: list[ReviewRecord]
+    body: str | None = None
+    merge_commit_body: str | None = None
 
 
 @dataclass
@@ -149,10 +151,11 @@ class GitHubClient:
             ) {
               pageInfo { hasNextPage endCursor }
               nodes {
-                id databaseId number title url isDraft
+                id databaseId number title url isDraft body
                 additions deletions baseRefName
                 createdAt mergedAt closedAt updatedAt
                 author { login ... on User { databaseId } }
+                mergeCommit { messageBody }
                 commits(first: 1) {
                   nodes { commit { committedDate authoredDate } }
                 }
@@ -301,6 +304,7 @@ def _to_pr_record(node: dict[str, Any]) -> PRRecord:
             )
         )
 
+    merge_commit = node.get("mergeCommit") or {}
     return PRRecord(
         source_id=str(node.get("databaseId") or node.get("id")),
         number=int(node["number"]),
@@ -317,6 +321,8 @@ def _to_pr_record(node: dict[str, Any]) -> PRRecord:
         is_draft=bool(node.get("isDraft")),
         first_commit_at=first_commit_at,
         reviews=reviews,
+        body=node.get("body"),
+        merge_commit_body=merge_commit.get("messageBody"),
     )
 
 

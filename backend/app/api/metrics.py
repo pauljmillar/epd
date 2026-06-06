@@ -131,6 +131,8 @@ def _load_period_prs(s: Session, start: date, end: date) -> list[dict]:
                 "additions": pr.additions,
                 "deletions": pr.deletions,
                 "reviews": reviews_by_pr.get(pr.id, []),
+                "ai_assisted": bool(pr.ai_assisted),
+                "ai_tool": pr.ai_tool,
             }
         )
     return out
@@ -220,6 +222,22 @@ def _build_org_metrics(period: str, s: Session) -> dict:
     cur_ttfr = ttfr.aggregate(cur_prs)
     cur_large_count = sz.count_large(cur_prs, settings.large_pr_threshold)
 
+    # AI attribution — % of merged PRs flagged as AI-assisted + per-tool counts.
+    def _ai_pct(prs: list[dict]) -> float | None:
+        if not prs:
+            return None
+        return round(100.0 * sum(1 for p in prs if p["ai_assisted"]) / len(prs), 1)
+
+    def _ai_tools_count(prs: list[dict]) -> dict[str, int]:
+        counts: dict[str, int] = defaultdict(int)
+        for p in prs:
+            if p["ai_assisted"] and p["ai_tool"]:
+                counts[p["ai_tool"]] += 1
+        return dict(counts)
+
+    cur_ai_pct = _ai_pct(cur_prs)
+    cur_ai_tools = _ai_tools_count(cur_prs)
+
     # Aggregates — prior (for deltas). When the prior window predates backfill, pass None so
     # _delta_pct returns null and the UI shows "— no prior data" instead of a junk percentage.
     if prior_is_valid:
@@ -230,6 +248,7 @@ def _build_org_metrics(period: str, s: Session) -> dict:
         prior_size = sz.aggregate(prior_prs)
         prior_cov = rc.aggregate(prior_prs)
         prior_ttfr = ttfr.aggregate(prior_prs)
+        prior_ai_pct = _ai_pct(prior_prs)
     else:
         deploy_per_week_prior = None
         throughput_per_week_prior = None
@@ -238,6 +257,7 @@ def _build_org_metrics(period: str, s: Session) -> dict:
         prior_size = None
         prior_cov = None
         prior_ttfr = None
+        prior_ai_pct = None
 
     # Weekly series
     df_series = df.per_week(cur_deps, start, end)
@@ -247,6 +267,33 @@ def _build_org_metrics(period: str, s: Session) -> dict:
     sz_series = sz.per_week(cur_prs, start, end)
     rc_series = rc.per_week(cur_prs, start, end)
     ttfr_series = ttfr.per_week(cur_prs, start, end)
+
+    # AI-assisted weekly series (% of merged PRs per week with ai_assisted=True)
+    ai_buckets: dict[date, list[bool]] = defaultdict(list)
+    for pr in cur_prs:
+        from .. import metrics as _m  # late import to avoid cycle
+        from ..metrics.common import iso_week_start as _iws
+
+        merged = pr["merged_at"]
+        if merged is None:
+            continue
+        w = _iws(merged)
+        if start <= w <= end:
+            ai_buckets[w].append(pr["ai_assisted"])
+
+    from datetime import timedelta as _td
+
+    from ..metrics.common import iso_week_start
+
+    ai_series: list[tuple[date, float | None]] = []
+    cur = iso_week_start(start)
+    last_w = iso_week_start(end)
+    while cur <= last_w:
+        vals = ai_buckets.get(cur, [])
+        ai_series.append(
+            (cur, round(100.0 * sum(vals) / len(vals), 1) if vals else None)
+        )
+        cur = cur + _td(days=7)
 
     # Per-repo (pseudo-team) breakdown
     by_repo: dict[str, list[dict]] = {}
@@ -272,6 +319,7 @@ def _build_org_metrics(period: str, s: Session) -> dict:
                 "median_pr_size_lines": _round_or_none(sz.aggregate(prs)),
                 "review_coverage_pct": _round_or_none(rc.aggregate(prs)),
                 "time_to_first_review_hours": _round_or_none(ttfr.aggregate(prs)),
+                "ai_assisted_pct": _ai_pct(prs),
             }
         )
 
@@ -334,6 +382,14 @@ def _build_org_metrics(period: str, s: Session) -> dict:
                 "delta_pct": _delta_pct(cur_ttfr, prior_ttfr),
                 "bad_direction": "up",
             },
+            "ai_assisted": {
+                "value": cur_ai_pct,
+                "unit": "pct",
+                "delta_pct": _delta_pct(cur_ai_pct, prior_ai_pct),
+                # No "bad direction" — this is informational, not a value judgment.
+                "bad_direction": None,
+                "tools": cur_ai_tools,
+            },
         },
         "series": {
             "deployment_frequency": [
@@ -366,6 +422,7 @@ def _build_org_metrics(period: str, s: Session) -> dict:
             "time_to_first_review": [
                 {"week": w.isoformat(), "value": _round_or_none(v)} for w, v in ttfr_series
             ],
+            "ai_assisted": [{"week": w.isoformat(), "value": v} for w, v in ai_series],
         },
         "teams": teams,
     }

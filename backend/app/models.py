@@ -63,6 +63,8 @@ class PullRequest(Base):
     deletions: Mapped[int] = mapped_column(Integer, default=0)
     base_branch: Mapped[str] = mapped_column(String(128), default="main")
     is_draft: Mapped[bool] = mapped_column(Boolean, default=False)
+    ai_assisted: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    ai_tool: Mapped[str | None] = mapped_column(String(32))
 
     repo: Mapped[Repository] = relationship()
     author: Mapped[Contributor | None] = relationship()

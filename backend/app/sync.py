@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
+from . import ai_attribution
 from .collectors.github import (
     DeploymentRecord,
     GitHubClient,
@@ -77,6 +78,9 @@ def _persist_pr(session: Session, repo: Repository, pr: PRRecord) -> None:
         return
     author = _upsert_contributor(session, pr.author_login, pr.author_source_id)
 
+    # AI attribution — merge-commit body is higher-signal than PR body so check it first.
+    ai_assisted, ai_tool = ai_attribution.detect(pr.merge_commit_body, pr.body)
+
     stmt = (
         pg_insert(PullRequest)
         .values(
@@ -93,6 +97,8 @@ def _persist_pr(session: Session, repo: Repository, pr: PRRecord) -> None:
             deletions=pr.deletions,
             base_branch=pr.base_branch[:128],
             is_draft=pr.is_draft,
+            ai_assisted=ai_assisted,
+            ai_tool=ai_tool,
         )
         .on_conflict_do_update(
             constraint="uq_pr_repo_number",
@@ -104,6 +110,8 @@ def _persist_pr(session: Session, repo: Repository, pr: PRRecord) -> None:
                 "deletions": pr.deletions,
                 "is_draft": pr.is_draft,
                 "author_id": author.id if author else None,
+                "ai_assisted": ai_assisted,
+                "ai_tool": ai_tool,
             },
         )
         .returning(PullRequest.id)

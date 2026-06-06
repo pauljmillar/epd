@@ -44,6 +44,7 @@ async def test_list_merged_prs_extracts_first_commit_and_reviews():
                             "title": "Fix bug",
                             "url": "https://github.com/o/good/pull/42",
                             "isDraft": False,
+                            "body": "Closes #100\n\n🤖 Generated with [Claude Code]",
                             "additions": 10,
                             "deletions": 3,
                             "baseRefName": "main",
@@ -52,6 +53,9 @@ async def test_list_merged_prs_extracts_first_commit_and_reviews():
                             "closedAt": "2026-06-02T10:00:00Z",
                             "updatedAt": "2026-06-02T10:00:00Z",
                             "author": {"login": "alice", "databaseId": 100},
+                            "mergeCommit": {
+                                "messageBody": "Co-Authored-By: Claude <noreply@anthropic.com>"
+                            },
                             "commits": {
                                 "nodes": [
                                     {"commit": {
@@ -87,3 +91,5 @@ async def test_list_merged_prs_extracts_first_commit_and_reviews():
     assert len(pr.reviews) == 1
     assert pr.reviews[0].reviewer_login == "bob"
     assert pr.reviews[0].state == "APPROVED"
+    assert pr.body and "Claude Code" in pr.body
+    assert pr.merge_commit_body and "Anthropic" in pr.merge_commit_body or "anthropic" in pr.merge_commit_body

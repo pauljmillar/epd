@@ -22,6 +22,8 @@ const DEFS = {
     "Percent of merged PRs that received at least one review from a non-author.",
   firstReview:
     "Median hours from PR open to first review event from a non-author.",
+  aiAssisted:
+    "Percent of merged PRs detected as AI-assisted. Detection looks for Co-Authored-By trailers on the merge commit and known markers in the PR body (Claude, Cursor, Copilot, Codex, Windsurf). LOWER BOUND — devs who use AI but strip the trailers will not be counted.",
 };
 
 export function OrgOverview() {
@@ -101,7 +103,16 @@ function OverviewBody({ data }: { data: OrgMetrics }) {
       kpiKey: "time_to_first_review",
       spark: s.time_to_first_review.slice(-8).map((p) => p.value),
     },
+    {
+      label: "AI-Assisted",
+      definition: DEFS.aiAssisted,
+      kpiKey: "ai_assisted",
+      spark: s.ai_assisted.slice(-8).map((p) => p.value),
+    },
   ];
+
+  const aiTools = data.kpis.ai_assisted.tools ?? {};
+  const aiToolsTotal = Object.values(aiTools).reduce((a, b) => a + b, 0);
 
   return (
     <>
@@ -147,9 +158,12 @@ function OverviewBody({ data }: { data: OrgMetrics }) {
         </ChartCard>
       </div>
 
-      <div className="mb-6">
+      <div className="grid grid-cols-2 gap-3 mb-6">
         <ChartCard title="PR Cycle Time breakdown (weekly)">
           <CycleTimeBreakdown data={s.pr_cycle_time} />
+        </ChartCard>
+        <ChartCard title="AI tool breakdown (period total)">
+          <AiToolsBreakdown tools={aiTools} total={aiToolsTotal} />
         </ChartCard>
       </div>
 
@@ -163,6 +177,53 @@ function ChartCard({ title, children }: { title: string; children: React.ReactNo
     <div className="bg-card border border-border rounded p-4">
       <div className="text-text font-medium text-[13px] mb-3">{title}</div>
       {children}
+    </div>
+  );
+}
+
+function AiToolsBreakdown({
+  tools,
+  total,
+}: {
+  tools: Record<string, number>;
+  total: number;
+}) {
+  if (total === 0) {
+    return (
+      <div className="h-[260px] flex items-center justify-center text-text-secondary text-sm text-center px-6">
+        No AI-assisted PRs detected in this period.
+        <br />
+        <span className="text-text-tertiary text-xs mt-2 block">
+          Detection relies on commit trailers and PR body markers; this is a lower bound.
+        </span>
+      </div>
+    );
+  }
+  const sorted = Object.entries(tools).sort((a, b) => b[1] - a[1]);
+  const max = sorted[0][1];
+  return (
+    <div className="flex flex-col gap-2 h-[260px] overflow-y-auto pr-2">
+      {sorted.map(([tool, count]) => {
+        const pct = (count / total) * 100;
+        const width = (count / max) * 100;
+        return (
+          <div key={tool}>
+            <div className="flex justify-between text-xs text-text-secondary mb-1">
+              <span className="capitalize">{tool}</span>
+              <span>
+                {count} PR{count === 1 ? "" : "s"} ({pct.toFixed(0)}%)
+              </span>
+            </div>
+            <div className="h-2 bg-border-subtle rounded">
+              <div
+                className="h-2 bg-text rounded"
+                style={{ width: `${width}%` }}
+                aria-label={`${tool}: ${count}`}
+              />
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -205,6 +266,7 @@ function TeamTable({
             <th className="text-right px-4 py-2 font-semibold">PR Size</th>
             <th className="text-right px-4 py-2 font-semibold">Coverage</th>
             <th className="text-right px-4 py-2 font-semibold">1st Review</th>
+            <th className="text-right px-4 py-2 font-semibold">AI %</th>
             <th className="text-right px-4 py-2 font-semibold">Throughput</th>
             <th className="text-right px-4 py-2 font-semibold">PRs</th>
             <th className="text-left px-4 py-2 font-semibold">Trend</th>
@@ -242,6 +304,11 @@ function TeamTable({
                 </td>
                 <td className="px-4 py-3 text-right text-text">
                   {fmtHours(t.time_to_first_review_hours)}
+                </td>
+                <td className="px-4 py-3 text-right text-text">
+                  {t.ai_assisted_pct === null
+                    ? "—"
+                    : `${t.ai_assisted_pct.toFixed(0)}%`}
                 </td>
                 <td className="px-4 py-3 text-right text-text">
                   {t.throughput_per_week.toFixed(1)}/wk
