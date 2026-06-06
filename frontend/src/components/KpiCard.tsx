@@ -16,6 +16,8 @@ interface Props {
   deltaPct: number | null;
   badDirection: BadDirection;
   spark: (number | null)[];
+  /** If set, the stat value renders red when value > redWhenAbove (BRD §9.5 PR Size). */
+  redWhenAbove?: number;
   onClick?: () => void;
 }
 
@@ -29,6 +31,8 @@ function formatValue(v: number | null, unit: string): string {
       return `${v.toFixed(1)}h`;
     case "pct":
       return `${v.toFixed(0)}%`;
+    case "lines":
+      return `${Math.round(v)} L`;
     default:
       return String(v);
   }
@@ -42,8 +46,12 @@ export function KpiCard({
   deltaPct,
   badDirection,
   spark,
+  redWhenAbove,
   onClick,
 }: Props) {
+  const valueIsAlert =
+    redWhenAbove !== undefined && value !== null && value > redWhenAbove;
+
   return (
     <button
       type="button"
@@ -58,7 +66,11 @@ export function KpiCard({
           ?
         </span>
       </div>
-      <div className="text-text font-semibold text-[32px] leading-tight mt-3">
+      <div
+        className={`font-semibold text-[32px] leading-tight mt-3 ${
+          valueIsAlert ? "text-alert" : "text-text"
+        }`}
+      >
         {formatValue(value, unit)}
       </div>
       <div className="flex items-end justify-between mt-2">

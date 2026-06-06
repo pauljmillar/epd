@@ -119,6 +119,13 @@ class ContributorMonthSnapshot(Base):
     lead_time_p50_hours: Mapped[float | None] = mapped_column(Numeric(10, 2))
     lead_time_p75_hours: Mapped[float | None] = mapped_column(Numeric(10, 2))
     deployment_count: Mapped[int] = mapped_column(Integer, default=0)
+    median_pr_size_lines: Mapped[float | None] = mapped_column(Numeric(10, 2))
+    review_coverage_pct: Mapped[float | None] = mapped_column(Numeric(5, 2))
+    median_time_to_first_review_hours: Mapped[float | None] = mapped_column(Numeric(10, 2))
+    median_pr_cycle_time_hours: Mapped[float | None] = mapped_column(Numeric(10, 2))
+    median_pickup_time_hours: Mapped[float | None] = mapped_column(Numeric(10, 2))
+    median_review_time_hours: Mapped[float | None] = mapped_column(Numeric(10, 2))
+    median_merge_time_hours: Mapped[float | None] = mapped_column(Numeric(10, 2))
     is_finalized: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
 
     __table_args__ = (
