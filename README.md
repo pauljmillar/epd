@@ -1,8 +1,8 @@
 # EPD — Engineering Productivity Dashboard
 
 A self-hosted, open-source engineering productivity dashboard for VPs of Engineering.
-Connects to GitHub (GitLab coming soon), derives accurate metrics from PR/commit data alone,
-and renders a clean, executive-ready view.
+Connects to GitHub and/or GitLab, derives accurate metrics from PR/commit data alone, and
+renders a clean, executive-ready view.
 
 🌐 **Live demo:** [epd-eta.vercel.app](https://epd-eta.vercel.app) — pointed at the
 [`astral-sh`](https://github.com/astral-sh) org (uv, ruff, rye, etc.)
@@ -52,8 +52,10 @@ For developers who already use these platforms. Three managed services, no serve
 3. [Deploy backend to Railway](https://railway.app/new). Point it at your fork. Set env vars:
    - `DATABASE_URL` — the Supabase pooler URL with `?sslmode=require`. Use the
      `postgresql+psycopg://` scheme.
-   - `GITHUB_TOKEN` — a GitHub PAT with `read:org` and `repo` scopes.
-   - `GITHUB_ORG` — the org slug (e.g. `astral-sh`).
+   - **GitHub** (optional): `GITHUB_TOKEN` (PAT with `read:org` + `repo`) + `GITHUB_ORG`.
+   - **GitLab** (optional): `GITLAB_TOKEN` (PAT with `read_api` + `read_repository`) +
+     `GITLAB_GROUP`. At least one of GitHub or GitLab must be configured; both can be set
+     and the dashboard merges them.
    - `BACKFILL_MONTHS=3`
    - `CORS_ORIGINS` — your Vercel URL once it exists.
    - `ADMIN_PASSWORD` — optional. If set, the dashboard requires this password to view.
@@ -148,14 +150,27 @@ See [`.env.example`](.env.example). Every opinionated default is overridable via
 - **Response cache:** 5-min in-process TTL on `/api/v1/metrics/org`, invalidated after each
   successful sync
 
+## GitLab limitations (vs GitHub)
+
+GitLab support is best-effort and a step behind GitHub in a few specific areas. The cause
+is GitLab's REST API surface, not a deliberate feature gate:
+
+- **PR Size (lines changed)**: GitLab's MR detail endpoint populates `additions` /
+  `deletions` only on recent versions of GitLab.com. Older self-hosted instances may
+  return 0. Repos showing `0 L` here are likely affected.
+- **AI-tool attribution via merge commit body**: GitLab requires a separate `/commits/{sha}`
+  call to fetch the merge-commit message body. v1 reads only the MR description for AI
+  attribution; signals appearing only in the merge commit will be missed for GitLab.
+- **Review state**: GitLab's free tier doesn't expose formal approvals. We treat any
+  non-system, non-author note as a "review event" (state COMMENTED). Notes containing
+  "lgtm" or "approved" are upgraded to APPROVED. Same treatment of cycle-time pickup as
+  GitHub.
+- **Sub-groups**: `GITLAB_GROUP=parent/child` works. Project discovery uses
+  `include_subgroups=true` so a top-level group sees everything.
+
 ## Roadmap
 
-See [`BACKLOG.md`](BACKLOG.md) for the prioritized roadmap. Highlights coming next:
-
-- AI-tool attribution (detect Claude / Cursor / Copilot / Codex via commit trailers)
-- Team / Metric / Contributor drill-down pages
-- Manual team grouping
-- GitLab collector
+See [`BACKLOG.md`](BACKLOG.md) for the prioritized roadmap.
 
 ## Development
 
