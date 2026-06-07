@@ -8,7 +8,7 @@ from sqlalchemy import select
 
 from .config import settings
 from .db import session_scope
-from .models import DataSource
+from .models import DataSource, Repository
 
 log = logging.getLogger(__name__)
 
@@ -47,13 +47,36 @@ def seed_from_env_vars() -> int:
                 )
             ).scalar_one_or_none()
             if existing:
+                ds = existing
                 # If the env-var token changed, refresh it — operator may rotate this way.
                 if token and existing.token != token:
                     existing.token = token
                     log.info("Refreshed token for existing data_source %s/%s", source, org)
-                continue
-            s.add(DataSource(source=source, org_or_group=org, token=token, is_active=True))
-            created += 1
-            log.info("Seeded data_source from env vars: %s/%s", source, org)
+            else:
+                ds = DataSource(source=source, org_or_group=org, token=token, is_active=True)
+                s.add(ds)
+                s.flush()
+                created += 1
+                log.info("Seeded data_source from env vars: %s/%s", source, org)
+
+            # Claim orphan repos that match this source/org but were synced before
+            # data_source_id existed. Safe: orphans by definition aren't owned by any
+            # other source. Idempotent: repos that already have a data_source_id are
+            # left alone.
+            prefix = f"{org}/"
+            claimed = s.execute(
+                Repository.__table__.update()
+                .where(
+                    Repository.data_source_id.is_(None),
+                    Repository.source == source,
+                    Repository.full_name.startswith(prefix),
+                )
+                .values(data_source_id=ds.id)
+            )
+            if claimed.rowcount:
+                log.info(
+                    "Claimed %d orphan repos for data_source %s/%s",
+                    claimed.rowcount, source, org,
+                )
 
     return created
