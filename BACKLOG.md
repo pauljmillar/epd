@@ -85,18 +85,27 @@ Possible future improvements (not blocking anything):
 
 ---
 
-## Phase C — GitLab collector
+## Phase C — GitLab collector ✅ DONE
 
-EPD's schema is already source-agnostic (`source: github|gitlab` everywhere). This phase adds
-the GitLab implementation.
+- [x] `backend/app/collectors/gitlab.py` mirrors the GitHub collector's dataclass interface
+      using GitLab REST v4. Group → projects (recursive, archived excluded), merged MRs,
+      MR detail, first-commit lead time, notes-as-reviews, tag-or-branch deployments.
+- [x] `sync.py` refactored source-agnostic: persist helpers take `source` arg. `run_sync()`
+      iterates over every configured source. Both can run.
+- [x] Per-source `is_tracked` filtering carries through (toggle a gitlab.com/x/y repo off
+      independently of github.com/a/b).
+- [x] 3 GitLab collector tests via respx. 41 total passing.
+- [x] README "GitLab limitations" section honestly documents v1 gaps.
+- [x] `.env.example` shows both source blocks.
 
-- [ ] **C1. GitLab REST v4 client** in `backend/app/collectors/gitlab.py`. Mirrors the GitHub
-      collector's interface (`list_org_repos`, `list_merged_prs`, `list_deployments`).
-- [ ] **C2. Merge request → PR mapping.** GitLab uses different terminology, same shape.
-- [ ] **C3. Deployments via tags or merges to `default_branch`.** Same logic as GitHub.
-- [ ] **C4. Sync orchestrator picks GitHub or GitLab** based on which env vars are set; runs
-      both if both configured.
-- [ ] **C5. README + `.env.example` updated** for GitLab credentials.
+**Carried forward:**
+
+- [ ] Merge-commit body for GitLab MRs (one extra `/commits/{sha}` call per MR; would
+      improve AI-attribution recall for GitLab).
+- [ ] GitLab GraphQL alternative — could batch the per-MR detail/commits/notes calls into
+      a single request, cutting backfill time for large orgs.
+- [ ] Self-hosted GitLab instance support (currently hardcoded to `gitlab.com`; add
+      `GITLAB_URL` env var to override).
 
 ---
 
