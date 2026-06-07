@@ -85,6 +85,35 @@ Possible future improvements (not blocking anything):
 
 ---
 
+## Phase DS — UI-managed Sources ✅ DONE
+
+- [x] Migration `0006` adds `data_sources` (id, source, org_or_group, token, is_active,
+      created_at, last_synced_at) and `repositories.data_source_id` FK.
+- [x] `app/sources.py` helpers: `get_active_sources()` and `seed_from_env_vars()`.
+- [x] Lifespan seed: env-var creds become a `data_sources` row on first boot (idempotent;
+      env-var changes after first run are ignored, except token rotation refreshes).
+- [x] `sync.py` rewritten to iterate over active `data_sources` rows; each gets its own
+      collector client with its own token. `last_synced_at` updated per source. Supports
+      `run_sync(only_data_source_id=...)` for one-off per-source syncs.
+- [x] Admin API: GET/POST/PATCH/DELETE `/api/v1/admin/sources`, POST
+      `/api/v1/admin/sources/{id}/purge` (hard delete cascade), POST
+      `/api/v1/admin/sources/{id}/sync` (per-source sync trigger).
+- [x] Frontend `/sources` admin page: add-source form, list with status pills, detail pane
+      with rotate-token / soft-remove / reactivate / purge / sync buttons. Two confirm
+      prompts protect against accidental purges.
+- [x] 4 new pytest cases covering CRUD, validation, purge, and env-var seed idempotency.
+      45 tests total.
+
+**Carried forward (deliberate v2):**
+
+- [ ] Token encryption at rest using `SECRET_KEY` (Fernet). Migration path: turn it on,
+      encrypt existing rows in place. Documented as planned in the README "Security model"
+      section.
+- [ ] Audit log of who added/removed/rotated sources (currently no per-user identity in
+      the system — would need a session/user concept first).
+- [ ] Multi-workspace data model so two configured sources can be viewed in isolation
+      rather than aggregated. Today the dashboard always merges all active sources.
+
 ## Phase C — GitLab collector ✅ DONE
 
 - [x] `backend/app/collectors/gitlab.py` mirrors the GitHub collector's dataclass interface

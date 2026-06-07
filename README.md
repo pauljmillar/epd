@@ -123,6 +123,33 @@ that repo alone has thousands of PRs).
 - **No MTTR or Change Failure Rate** — these require incident data we don't ingest.
 - **Not a SaaS.** Self-hosted only.
 
+## Managing sources from the UI
+
+Once the dashboard is up and you've logged in, **Sources** (bottom of the sidebar) is the
+canonical place to add or remove orgs/groups. You can:
+
+- Add a new GitHub org or GitLab group (paste a PAT, click Add, click Sync).
+- **Soft-remove** a source: its repos disappear from the dashboard but stay in the DB
+  in case you change your mind.
+- **Purge** a source: hard-deletes every PR, review, commit, deployment, and snapshot
+  tied to it. Irreversible.
+- Rotate the token for an existing source.
+- Trigger a one-off sync for a single source (rather than waiting for the nightly job).
+
+Env-var credentials (`GITHUB_TOKEN`/`GITHUB_ORG`, `GITLAB_TOKEN`/`GITLAB_GROUP`) still
+work — on first boot, EPD seeds matching rows into the `data_sources` table from those
+vars. After the first run, the DB is the source of truth and env-var changes are ignored.
+
+## Security model
+
+- `ADMIN_PASSWORD` (env var, **strongly recommended** in production) gates every
+  `/api/v1/*` route except `/health`. Anyone with the password can read/write source
+  credentials via the API. Set it before exposing the dashboard publicly.
+- Source PATs are stored **plain-text** in the `data_sources.token` column. Lock down DB
+  access (Supabase does this for you by default). Token rotation is a single API call.
+- `SECRET_KEY` (env var) is reserved for session signing; it's not yet used to encrypt
+  tokens at rest — that's a planned upgrade.
+
 ## Configuration
 
 See [`.env.example`](.env.example). Every opinionated default is overridable via env var:

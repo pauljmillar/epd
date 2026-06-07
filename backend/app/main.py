@@ -10,6 +10,7 @@ from .api import admin, health, metrics, sync, teams
 from .config import settings
 from .scheduler import start as start_scheduler
 from .scheduler import stop as stop_scheduler
+from .sources import seed_from_env_vars
 
 logging.basicConfig(
     level=logging.INFO,
@@ -19,6 +20,12 @@ logging.basicConfig(
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # One-time idempotent seed: convert env-var credentials into data_sources rows so the
+    # UI can manage them. Safe to run on every boot — only inserts when no matching row.
+    try:
+        seed_from_env_vars()
+    except Exception:  # noqa: BLE001
+        logging.exception("Failed to seed data_sources from env vars (continuing)")
     start_scheduler()
     yield
     stop_scheduler()

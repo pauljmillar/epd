@@ -44,8 +44,27 @@ class Repository(Base):
     full_name: Mapped[str] = mapped_column(String(512), nullable=False, index=True)
     default_branch: Mapped[str] = mapped_column(String(128), default="main")
     is_tracked: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    data_source_id: Mapped[int | None] = mapped_column(
+        ForeignKey("data_sources.id", ondelete="SET NULL"), index=True
+    )
 
     __table_args__ = (UniqueConstraint("source", "source_id", name="uq_repo_source"),)
+
+
+class DataSource(Base):
+    __tablename__ = "data_sources"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    source: Mapped[str] = mapped_column(String(16), nullable=False)  # github | gitlab
+    org_or_group: Mapped[str] = mapped_column(String(256), nullable=False)
+    token: Mapped[str] = mapped_column(String, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (UniqueConstraint("source", "org_or_group", name="uq_data_source_org"),)
 
 
 class Team(Base):

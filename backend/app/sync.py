@@ -1,15 +1,16 @@
-"""Sync orchestration — pulls from configured collectors (GitHub, GitLab) and persists.
+"""Sync orchestration — iterates over active data_sources rows and persists each one.
 
 The two collectors expose structurally-compatible dataclasses (RepoRef, PRRecord,
-ReviewRecord, DeploymentRecord) so the persistence layer is source-agnostic — we just
-tag the rows with `source` ('github' | 'gitlab').
+ReviewRecord, DeploymentRecord) so the persistence layer is source-agnostic — we tag rows
+with `source` ('github' | 'gitlab') plus the originating `data_source_id` for clean
+scope-by-source admin actions (purge, soft-remove).
 """
 from __future__ import annotations
 
 import asyncio
 import logging
 from datetime import datetime, timezone
-from typing import Any, Protocol
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -24,6 +25,7 @@ from .config import settings
 from .db import session_scope
 from .models import (
     Contributor,
+    DataSource,
     Deployment,
     PRCommit,
     PRReview,
@@ -31,6 +33,7 @@ from .models import (
     Repository,
     SyncLog,
 )
+from .sources import get_active_sources
 
 log = logging.getLogger(__name__)
 
@@ -58,7 +61,9 @@ def _upsert_contributor(
     return c
 
 
-def _upsert_repo(session: Session, source: str, ref: Any) -> Repository:
+def _upsert_repo(
+    session: Session, source: str, ref: Any, data_source_id: int | None = None
+) -> Repository:
     existing = session.execute(
         select(Repository).where(
             Repository.source == source, Repository.source_id == ref.source_id
@@ -68,6 +73,8 @@ def _upsert_repo(session: Session, source: str, ref: Any) -> Repository:
         existing.name = ref.name
         existing.full_name = ref.full_name
         existing.default_branch = ref.default_branch
+        if data_source_id is not None and existing.data_source_id != data_source_id:
+            existing.data_source_id = data_source_id
         return existing
     r = Repository(
         source=source,
@@ -75,6 +82,7 @@ def _upsert_repo(session: Session, source: str, ref: Any) -> Repository:
         name=ref.name,
         full_name=ref.full_name,
         default_branch=ref.default_branch,
+        data_source_id=data_source_id,
     )
     session.add(r)
     session.flush()
@@ -167,101 +175,90 @@ def _persist_deployment(session: Session, repo: Repository, dep: Any) -> None:
 # --- Per-source runners ------------------------------------------------------
 
 
-class _SourceCollector(Protocol):
-    """Structural type both GitHub/GitLab clients satisfy."""
-
-    async def __aenter__(self) -> "_SourceCollector": ...
-    async def __aexit__(self, *exc: Any) -> None: ...
-
-
-async def _run_one_source(
-    source: str,
-    collector: Any,
-    list_repos_coro,
-    list_prs_coro,
-    list_deps_coro,
-    since: datetime,
-) -> tuple[int, int]:
-    """Common loop. Returns (repos_synced, prs_synced)."""
+async def _run_one_source(ds: DataSource) -> tuple[int, int]:
+    """Sync one data_source row. Returns (repos_synced, prs_synced)."""
     repos_synced = 0
     prs_synced = 0
 
-    with session_scope() as s:
-        untracked = {
-            row[0]
-            for row in s.execute(
-                select(Repository.full_name).where(
-                    Repository.source == source, Repository.is_tracked.is_(False)
-                )
-            ).all()
-        }
-    excluded = settings.excluded_repo_set
+    if ds.source == "github":
+        since = github_backfill_since()
+        client_cm = GitHubClient(ds.token)
+    elif ds.source == "gitlab":
+        since = gitlab_backfill_since()
+        client_cm = GitLabClient(ds.token)
+    else:
+        log.warning("Unknown source %r on data_source %s, skipping", ds.source, ds.id)
+        return 0, 0
 
-    refs = await list_repos_coro
-    log.info("[%s] found %d repos", source, len(refs))
+    async with client_cm as client:
+        if ds.source == "github":
+            refs = await client.list_org_repos(ds.org_or_group)
+        else:
+            refs = await client.list_group_projects(ds.org_or_group)
+        log.info("[%s/%s] found %d repos", ds.source, ds.org_or_group, len(refs))
 
-    for ref in refs:
-        if ref.name in excluded or ref.full_name in excluded:
-            continue
-        if ref.full_name in untracked:
-            log.info("[%s] skipping untracked %s", source, ref.full_name)
-            continue
-        try:
-            prs = await list_prs_coro(ref, since)
-            deps = await list_deps_coro(ref, since)
-        except Exception as e:  # noqa: BLE001
-            log.exception("[%s] sync failed for %s: %s", source, ref.full_name, e)
-            continue
         with session_scope() as s:
-            repo = _upsert_repo(s, source, ref)
-            for pr in prs:
-                _persist_pr(s, source, repo, pr)
-                prs_synced += 1
-            for d in deps:
-                _persist_deployment(s, repo, d)
-        repos_synced += 1
-        log.info("[%s] synced %s: %d PRs, %d deployments", source, ref.full_name, len(prs), len(deps))
+            untracked = {
+                row[0]
+                for row in s.execute(
+                    select(Repository.full_name).where(
+                        Repository.source == ds.source, Repository.is_tracked.is_(False)
+                    )
+                ).all()
+            }
+        excluded = settings.excluded_repo_set
+
+        list_prs = (
+            client.list_merged_prs if ds.source == "github" else client.list_merged_mrs
+        )
+        list_deps = client.list_deployments
+
+        for ref in refs:
+            if ref.name in excluded or ref.full_name in excluded:
+                continue
+            if ref.full_name in untracked:
+                log.info("[%s/%s] skipping untracked %s", ds.source, ds.org_or_group, ref.full_name)
+                continue
+            try:
+                prs = await list_prs(ref, since)
+                deps = await list_deps(ref, since)
+            except Exception as e:  # noqa: BLE001
+                log.exception("[%s/%s] sync failed for %s: %s", ds.source, ds.org_or_group, ref.full_name, e)
+                continue
+            with session_scope() as s:
+                repo = _upsert_repo(s, ds.source, ref, data_source_id=ds.id)
+                for pr in prs:
+                    _persist_pr(s, ds.source, repo, pr)
+                    prs_synced += 1
+                for d in deps:
+                    _persist_deployment(s, repo, d)
+            repos_synced += 1
+            log.info(
+                "[%s/%s] synced %s: %d PRs, %d deployments",
+                ds.source,
+                ds.org_or_group,
+                ref.full_name,
+                len(prs),
+                len(deps),
+            )
+
+    # Mark this source's sync time on success of its loop (regardless of per-repo errors).
+    with session_scope() as s:
+        row = s.get(DataSource, ds.id)
+        if row:
+            row.last_synced_at = datetime.now(timezone.utc)
 
     return repos_synced, prs_synced
 
 
-async def _run_github() -> tuple[int, int]:
-    since = github_backfill_since()
-    async with GitHubClient(settings.github_token) as gh:
-        return await _run_one_source(
-            "github",
-            gh,
-            gh.list_org_repos(settings.github_org),
-            gh.list_merged_prs,
-            gh.list_deployments,
-            since,
-        )
-
-
-async def _run_gitlab() -> tuple[int, int]:
-    since = gitlab_backfill_since()
-    async with GitLabClient(settings.gitlab_token) as gl:
-        return await _run_one_source(
-            "gitlab",
-            gl,
-            gl.list_group_projects(settings.gitlab_group),
-            gl.list_merged_mrs,
-            gl.list_deployments,
-            since,
-        )
-
-
-async def run_sync() -> dict:
-    """One sync pass across every configured source."""
-    sources_to_run: list[tuple[str, Any]] = []
-    if settings.github_token and settings.github_org:
-        sources_to_run.append(("github", _run_github))
-    if settings.gitlab_token and settings.gitlab_group:
-        sources_to_run.append(("gitlab", _run_gitlab))
-
-    if not sources_to_run:
-        log.warning("No source configured (need GITHUB_TOKEN+GITHUB_ORG or GITLAB_TOKEN+GITLAB_GROUP)")
-        return {"status": "skipped", "reason": "no source configured"}
+async def run_sync(only_data_source_id: int | None = None) -> dict:
+    """Sync every active data_source (or just one if `only_data_source_id` is given)."""
+    sources = list(get_active_sources())
+    if only_data_source_id is not None:
+        sources = [s for s in sources if s.id == only_data_source_id]
+    if not sources:
+        log.warning("No active data_sources to sync")
+        return {"status": "skipped", "reason": "no active data_sources"}
 
     started = datetime.now(timezone.utc)
     with session_scope() as s:
@@ -275,9 +272,9 @@ async def run_sync() -> dict:
     err: str | None = None
 
     try:
-        for source_name, runner in sources_to_run:
-            log.info("Running sync for %s", source_name)
-            r, p = await runner()
+        for ds in sources:
+            log.info("Running sync for data_source %s/%s", ds.source, ds.org_or_group)
+            r, p = await _run_one_source(ds)
             total_repos += r
             total_prs += p
     except Exception as e:  # noqa: BLE001
@@ -309,5 +306,5 @@ async def run_sync() -> dict:
     }
 
 
-def run_sync_sync() -> dict:
-    return asyncio.run(run_sync())
+def run_sync_sync(only_data_source_id: int | None = None) -> dict:
+    return asyncio.run(run_sync(only_data_source_id=only_data_source_id))

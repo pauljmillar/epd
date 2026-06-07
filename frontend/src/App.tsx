@@ -7,6 +7,7 @@ import { MetricDetail } from "./pages/MetricDetail";
 import { OrgOverview } from "./pages/OrgOverview";
 import { RepoDetail } from "./pages/RepoDetail";
 import { ReposIndex } from "./pages/ReposIndex";
+import { SourcesIndex } from "./pages/SourcesIndex";
 import { TeamDetail } from "./pages/TeamDetail";
 import { TeamsIndex } from "./pages/TeamsIndex";
 
@@ -25,6 +26,7 @@ export default function App() {
               <Route path="/teams/:teamId/view" element={<TeamDetail />} />
               <Route path="/contributors" element={<ContributorsIndex />} />
               <Route path="/contributors/:login" element={<ContributorPage />} />
+              <Route path="/sources" element={<SourcesIndex />} />
               <Route path="/metrics/:metricKey" element={<MetricDetail />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>

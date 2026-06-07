@@ -103,6 +103,20 @@ export function Sidebar({ appName }: { appName: string }) {
               {c.login}
             </NavItem>
           ))}
+
+        <div className="mt-5 mb-1 px-3">
+          <NavLink
+            to="/sources"
+            end
+            className={({ isActive }) =>
+              `text-[10px] font-semibold uppercase tracking-wider ${
+                isActive ? "text-text" : "text-text-tertiary hover:text-text"
+              }`
+            }
+          >
+            Sources
+          </NavLink>
+        </div>
       </nav>
 
       <div className="border-t border-border p-3 text-xs text-text-secondary">

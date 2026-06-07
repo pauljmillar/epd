@@ -244,6 +244,54 @@ export async function setContributorTracked(login: string, isTracked: boolean) {
   );
 }
 
+// --- Admin: data_sources -----------------------------------------------------
+
+export interface DataSource {
+  id: number;
+  source: "github" | "gitlab";
+  org_or_group: string;
+  is_active: boolean;
+  created_at: string | null;
+  last_synced_at: string | null;
+  repo_count: number;
+  pr_count: number;
+  token_preview: string;
+}
+
+export function useDataSources() {
+  return useQuery({
+    queryKey: ["data-sources"],
+    queryFn: () => get<{ sources: DataSource[] }>("/api/v1/admin/sources"),
+  });
+}
+
+export async function createDataSource(input: {
+  source: "github" | "gitlab";
+  org_or_group: string;
+  token: string;
+}): Promise<DataSource> {
+  return postJson("/api/v1/admin/sources", input);
+}
+
+export async function updateDataSource(
+  id: number,
+  patch: { token?: string; is_active?: boolean },
+): Promise<DataSource> {
+  return patchJson(`/api/v1/admin/sources/${id}`, patch);
+}
+
+export async function softRemoveDataSource(id: number): Promise<void> {
+  await del(`/api/v1/admin/sources/${id}`);
+}
+
+export async function purgeDataSource(id: number): Promise<{ deleted_repos: number }> {
+  return postJson(`/api/v1/admin/sources/${id}/purge`, {});
+}
+
+export async function syncDataSource(id: number): Promise<{ status: string; repos_synced?: number; prs_synced?: number }> {
+  return postJson(`/api/v1/admin/sources/${id}/sync`, {});
+}
+
 export function useSyncStatus() {
   return useQuery({
     queryKey: ["sync-status"],
