@@ -280,6 +280,60 @@ def purge_source(source_id: int, s: Session = Depends(get_session)) -> dict:
     }
 
 
+@router.post("/sources/replace", status_code=201)
+def replace_sources(body: SourceCreate, s: Session = Depends(get_session)) -> dict:
+    """Atomic swap: create the new source AND soft-remove every other active source in
+    one transaction. Use this for the 'switch what EPD tracks' flow — additive 'add' would
+    leave the old data merged into the dashboard.
+
+    Old sources are deactivated (is_active=false) and their repos set is_tracked=false.
+    Data stays in the DB so the user can re-activate or purge later.
+    """
+    # Reject duplicate of the new target first (clearer error than a constraint violation).
+    if s.execute(
+        select(DataSource).where(
+            DataSource.source == body.source,
+            DataSource.org_or_group == body.org_or_group,
+        )
+    ).scalar_one_or_none():
+        raise HTTPException(
+            409,
+            f"{body.source}/{body.org_or_group} already exists. Use PATCH "
+            "to reactivate it, then soft-remove the others.",
+        )
+
+    # Soft-remove every currently active source.
+    active = s.execute(
+        select(DataSource).where(DataSource.is_active.is_(True))
+    ).scalars().all()
+    removed_ids = []
+    for old in active:
+        old.is_active = False
+        removed_ids.append(old.id)
+    if removed_ids:
+        s.execute(
+            Repository.__table__.update()
+            .where(Repository.data_source_id.in_(removed_ids))
+            .values(is_tracked=False)
+        )
+
+    # Add the new source.
+    new_ds = DataSource(
+        source=body.source,
+        org_or_group=body.org_or_group,
+        token=body.token,
+        is_active=True,
+    )
+    s.add(new_ds)
+    s.commit()
+    s.refresh(new_ds)
+    cache_invalidate_all()
+    return {
+        **_serialize_source(s, new_ds),
+        "soft_removed_source_ids": removed_ids,
+    }
+
+
 @router.post("/sources/{source_id}/sync")
 async def trigger_source_sync(source_id: int, s: Session = Depends(get_session)) -> dict:
     ds = s.get(DataSource, source_id)

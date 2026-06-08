@@ -292,6 +292,14 @@ export async function syncDataSource(id: number): Promise<{ status: string; repo
   return postJson(`/api/v1/admin/sources/${id}/sync`, {});
 }
 
+export async function replaceDataSources(input: {
+  source: "github" | "gitlab";
+  org_or_group: string;
+  token: string;
+}): Promise<DataSource & { soft_removed_source_ids: number[] }> {
+  return postJson("/api/v1/admin/sources/replace", input);
+}
+
 export function useSyncStatus() {
   return useQuery({
     queryKey: ["sync-status"],

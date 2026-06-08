@@ -108,6 +108,51 @@ def test_validation_rejects_unknown_source(clean_sources):
     assert r.status_code == 422
 
 
+def test_replace_deactivates_existing_and_creates_new(clean_sources):
+    client = TestClient(app)
+    # Two existing active sources
+    a = client.post(
+        "/api/v1/admin/sources",
+        json={"source": "github", "org_or_group": "old1", "token": "tok1"},
+    ).json()
+    b = client.post(
+        "/api/v1/admin/sources",
+        json={"source": "github", "org_or_group": "old2", "token": "tok2"},
+    ).json()
+    assert a["is_active"] and b["is_active"]
+
+    # Replace with a third
+    r = client.post(
+        "/api/v1/admin/sources/replace",
+        json={"source": "gitlab", "org_or_group": "newco", "token": "glpat"},
+    )
+    assert r.status_code == 201, r.text
+    new_src = r.json()
+    assert new_src["source"] == "gitlab"
+    assert new_src["org_or_group"] == "newco"
+    assert sorted(new_src["soft_removed_source_ids"]) == sorted([a["id"], b["id"]])
+
+    # Old two are now inactive; new one is active
+    listed = client.get("/api/v1/admin/sources").json()["sources"]
+    by_id = {s["id"]: s for s in listed}
+    assert by_id[a["id"]]["is_active"] is False
+    assert by_id[b["id"]]["is_active"] is False
+    assert by_id[new_src["id"]]["is_active"] is True
+
+
+def test_replace_rejects_when_target_already_exists(clean_sources):
+    client = TestClient(app)
+    client.post(
+        "/api/v1/admin/sources",
+        json={"source": "github", "org_or_group": "existing", "token": "tok"},
+    )
+    r = client.post(
+        "/api/v1/admin/sources/replace",
+        json={"source": "github", "org_or_group": "existing", "token": "tok"},
+    )
+    assert r.status_code == 409
+
+
 def test_seed_from_env_vars_is_idempotent(clean_sources, monkeypatch):
     from app.sources import seed_from_env_vars
 

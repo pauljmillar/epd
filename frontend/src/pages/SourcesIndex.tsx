@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   createDataSource,
   purgeDataSource,
+  replaceDataSources,
   softRemoveDataSource,
   syncDataSource,
   updateDataSource,
@@ -26,17 +27,19 @@ export function SourcesIndex() {
     }
   }, [sources, selectedId]);
 
+  const activeSources = sources.filter((s) => s.is_active);
+
   return (
     <div>
       <PageHeader title="Sources" period="" onPeriodChange={() => {}} />
-      <p className="text-text-secondary text-sm -mt-4 mb-6">
-        Each source is a (GitHub org or GitLab group, token) pair. The dashboard aggregates
-        every active source. Soft-remove hides a source's data; purge deletes it permanently.
-      </p>
+      <DashboardStateHero activeSources={activeSources} />
 
       <div className="grid grid-cols-2 gap-4">
         <div className="space-y-4">
-          <AddSourceForm onCreated={refetch} />
+          <AddSourceForm
+            activeSources={activeSources}
+            onCreated={refetch}
+          />
           <SourceList
             sources={sources}
             selectedId={selectedId}
@@ -58,35 +61,141 @@ export function SourcesIndex() {
   );
 }
 
-function AddSourceForm({ onCreated }: { onCreated: () => void }) {
+function DashboardStateHero({ activeSources }: { activeSources: DataSource[] }) {
+  if (activeSources.length === 0) {
+    return (
+      <div className="bg-card border border-border rounded p-4 -mt-4 mb-6 text-sm text-text-secondary">
+        No active sources. Add one below to start collecting data — the nightly sync runs at
+        02:00 UTC, or click "Sync now" on the source detail pane.
+      </div>
+    );
+  }
+  const totalRepos = activeSources.reduce((a, s) => a + s.repo_count, 0);
+  const totalPrs = activeSources.reduce((a, s) => a + s.pr_count, 0);
+  return (
+    <div className="bg-card border border-border rounded p-4 -mt-4 mb-6 text-sm">
+      <div className="text-text mb-2">
+        Your dashboard is aggregating data from{" "}
+        <strong>
+          {activeSources.length} active source{activeSources.length === 1 ? "" : "s"}
+        </strong>{" "}
+        — {totalRepos} repos, {totalPrs.toLocaleString()} PRs.
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        {activeSources.map((s) => (
+          <span
+            key={s.id}
+            className="inline-block px-2 py-0.5 text-xs bg-active text-text rounded"
+          >
+            <span className="text-text-tertiary uppercase text-[10px] mr-1.5">
+              {s.source}
+            </span>
+            {s.org_or_group}
+          </span>
+        ))}
+      </div>
+      {activeSources.length > 1 && (
+        <div className="text-text-tertiary text-xs mt-2">
+          Multiple active sources are merged into every KPI. Soft-remove a source to drop
+          its data from the dashboard, or use <em>Replace existing</em> on the Add form to
+          swap atomically.
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AddSourceForm({
+  activeSources,
+  onCreated,
+}: {
+  activeSources: DataSource[];
+  onCreated: () => void;
+}) {
   const [source, setSource] = useState<"github" | "gitlab">("github");
   const [orgOrGroup, setOrgOrGroup] = useState("");
   const [token, setToken] = useState("");
-  const [submitting, setSubmitting] = useState(false);
+  const [submitting, setSubmitting] = useState<null | "add" | "replace">(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
-  async function submit(e: React.FormEvent) {
+  const hasActive = activeSources.length > 0;
+
+  function resetForm() {
+    setOrgOrGroup("");
+    setToken("");
+  }
+
+  async function handleAdd(e: React.FormEvent) {
     e.preventDefault();
     if (!orgOrGroup || !token || submitting) return;
-    setSubmitting(true);
+    setSubmitting("add");
     setError(null);
     setSuccess(null);
     try {
-      const ds = await createDataSource({ source, org_or_group: orgOrGroup.trim(), token: token.trim() });
-      setSuccess(`Added ${ds.source}/${ds.org_or_group}. Use Sync to backfill.`);
-      setOrgOrGroup("");
-      setToken("");
+      const ds = await createDataSource({
+        source,
+        org_or_group: orgOrGroup.trim(),
+        token: token.trim(),
+      });
+      setSuccess(
+        `Added ${ds.source}/${ds.org_or_group}. ${
+          hasActive
+            ? `Dashboard now aggregates ${activeSources.length + 1} sources. Use Sync to backfill.`
+            : "Use Sync to backfill."
+        }`,
+      );
+      resetForm();
       onCreated();
     } catch (e) {
       setError(String(e));
     } finally {
-      setSubmitting(false);
+      setSubmitting(null);
+    }
+  }
+
+  async function handleReplace() {
+    if (!orgOrGroup || !token || submitting) return;
+    const others = activeSources
+      .map((s) => `${s.source}/${s.org_or_group}`)
+      .join(", ");
+    if (
+      !confirm(
+        `Replace existing sources?\n\n` +
+          `This will:\n` +
+          `  • Add ${source}/${orgOrGroup.trim()}\n` +
+          `  • Soft-remove ${activeSources.length} existing active source(s): ${others}\n\n` +
+          `Soft-removed sources are hidden from the dashboard but their data stays in the DB. ` +
+          `You can re-activate or purge them later.`,
+      )
+    )
+      return;
+
+    setSubmitting("replace");
+    setError(null);
+    setSuccess(null);
+    try {
+      const r = await replaceDataSources({
+        source,
+        org_or_group: orgOrGroup.trim(),
+        token: token.trim(),
+      });
+      setSuccess(
+        `Switched to ${r.source}/${r.org_or_group}. Soft-removed ${
+          r.soft_removed_source_ids.length
+        } source(s). Use Sync to backfill.`,
+      );
+      resetForm();
+      onCreated();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setSubmitting(null);
     }
   }
 
   return (
-    <form onSubmit={submit} className="bg-card border border-border rounded p-4 space-y-3">
+    <form onSubmit={handleAdd} className="bg-card border border-border rounded p-4 space-y-3">
       <div className="text-text font-medium text-[13px]">Add source</div>
       <div className="flex gap-2">
         <label className="text-sm text-text-secondary flex items-center gap-1.5">
@@ -110,26 +219,57 @@ function AddSourceForm({ onCreated }: { onCreated: () => void }) {
         type="text"
         value={orgOrGroup}
         onChange={(e) => setOrgOrGroup(e.target.value)}
-        placeholder={source === "github" ? "Org slug (e.g. astral-sh)" : "Group path (e.g. mygroup or mygroup/sub)"}
+        placeholder={
+          source === "github"
+            ? "Org slug (e.g. astral-sh)"
+            : "Group path (e.g. mygroup or mygroup/sub)"
+        }
         className="border border-border rounded px-3 py-2 text-sm w-full"
       />
       <input
         type="password"
         value={token}
         onChange={(e) => setToken(e.target.value)}
-        placeholder={source === "github" ? "PAT (read:org + repo)" : "PAT (read_api + read_repository)"}
+        placeholder={
+          source === "github"
+            ? "PAT (read:org + repo)"
+            : "PAT (read_api + read_repository)"
+        }
         className="border border-border rounded px-3 py-2 text-sm w-full"
         autoComplete="off"
       />
+
+      {hasActive && (
+        <div className="text-text-secondary text-xs border-l-2 border-border pl-2 py-1">
+          ⚠️ <strong className="text-text">Add</strong> will aggregate this source's metrics
+          with the {activeSources.length} existing active source
+          {activeSources.length === 1 ? "" : "s"}. To swap instead, use{" "}
+          <strong className="text-text">Replace existing</strong>.
+        </div>
+      )}
+
       {error && <div className="text-alert text-xs">{error}</div>}
       {success && <div className="text-text-secondary text-xs">{success}</div>}
-      <button
-        type="submit"
-        disabled={!orgOrGroup || !token || submitting}
-        className="bg-text text-white text-sm px-4 py-2 rounded disabled:opacity-40"
-      >
-        {submitting ? "Adding…" : "Add source"}
-      </button>
+
+      <div className="flex gap-2">
+        <button
+          type="submit"
+          disabled={!orgOrGroup || !token || submitting !== null}
+          className="bg-text text-white text-sm px-4 py-2 rounded disabled:opacity-40"
+        >
+          {submitting === "add" ? "Adding…" : "Add source"}
+        </button>
+        {hasActive && (
+          <button
+            type="button"
+            onClick={handleReplace}
+            disabled={!orgOrGroup || !token || submitting !== null}
+            className="border border-border text-text text-sm px-4 py-2 rounded hover:bg-active disabled:opacity-40"
+          >
+            {submitting === "replace" ? "Replacing…" : "Replace existing"}
+          </button>
+        )}
+      </div>
     </form>
   );
 }
