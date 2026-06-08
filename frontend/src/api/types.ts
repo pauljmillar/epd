@@ -61,13 +61,27 @@ export interface OrgMetrics {
   notable_prs?: { lead_time: NotablePR[] };
 }
 
+export interface SyncEvent {
+  ts: string;
+  level: "info" | "warning" | "error";
+  msg: string;
+}
+
 export interface SyncStatus {
-  status: string;
+  status: string; // never_run | running | completed | failed | cancelled
   started_at?: string;
   completed_at?: string | null;
   repos_synced?: number;
   prs_synced?: number;
   error?: string | null;
+  // Live progress (Phase SP)
+  total_repos?: number;
+  repos_done?: number;
+  current_source_id?: number | null;
+  current_source_label?: string | null;
+  current_repo?: string | null;
+  cancel_requested?: boolean;
+  events?: SyncEvent[];
 }
 
 export interface NotablePR {

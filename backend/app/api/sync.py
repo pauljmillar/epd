@@ -4,7 +4,11 @@ import asyncio
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
+from ..db import get_session
+from ..models import SyncLog
 from ..snapshots import last_sync_status
 from ..sync import run_sync
 from .auth import require_auth
@@ -35,3 +39,19 @@ async def trigger() -> dict:
     async with _trigger_lock:
         result = await run_sync()
     return result
+
+
+@router.post("/cancel")
+def cancel(s: Session = Depends(get_session)) -> dict:
+    """Flag the running sync to stop at the next safe boundary (between repos). The loop
+    in sync.py will commit the in-flight repo, then exit cleanly with status='cancelled'."""
+    running = s.execute(
+        select(SyncLog).where(SyncLog.status == "running").order_by(SyncLog.started_at.desc())
+    ).scalars().first()
+    if not running:
+        raise HTTPException(404, "No sync currently running")
+    if running.cancel_requested:
+        return {"ok": True, "already_requested": True, "sync_log_id": running.id}
+    running.cancel_requested = True
+    s.commit()
+    return {"ok": True, "sync_log_id": running.id}

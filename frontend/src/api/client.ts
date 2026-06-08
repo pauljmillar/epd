@@ -304,6 +304,16 @@ export function useSyncStatus() {
   return useQuery({
     queryKey: ["sync-status"],
     queryFn: () => get<SyncStatus>("/api/v1/sync/status"),
-    refetchInterval: 30_000,
+    // Tight cadence while a sync is in progress so the UI feels live; relax to 30s when
+    // idle.
+    refetchInterval: (q) => (q.state.data?.status === "running" ? 3_000 : 30_000),
   });
+}
+
+export async function cancelSync(): Promise<{
+  ok: boolean;
+  sync_log_id: number;
+  already_requested?: boolean;
+}> {
+  return postJson("/api/v1/sync/cancel", {});
 }

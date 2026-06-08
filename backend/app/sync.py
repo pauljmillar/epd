@@ -172,11 +172,56 @@ def _persist_deployment(session: Session, repo: Repository, dep: Any) -> None:
     )
 
 
+# --- Progress + event helpers (added in Phase SP) ----------------------------
+
+# How many events to keep in the ring buffer. Anything older falls off.
+_EVENT_BUFFER_SIZE = 50
+
+
+def _progress(log_id: int, **fields: Any) -> None:
+    """Patch the given sync_log row. Short, isolated transaction so concurrent reads see
+    the new state quickly."""
+    with session_scope() as s:
+        entry = s.get(SyncLog, log_id)
+        if entry is None:
+            return
+        for k, v in fields.items():
+            setattr(entry, k, v)
+
+
+def _emit(log_id: int, level: str, msg: str) -> None:
+    """Append an event to the ring buffer on the given sync_log row, truncating to the
+    last _EVENT_BUFFER_SIZE entries."""
+    event = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "level": level,
+        "msg": msg,
+    }
+    with session_scope() as s:
+        entry = s.get(SyncLog, log_id)
+        if entry is None:
+            return
+        # SQLAlchemy JSONB lists must be reassigned (not mutated in place) for the change
+        # to be detected. Slice off the head if we exceed the buffer size.
+        next_events = (entry.events or []) + [event]
+        if len(next_events) > _EVENT_BUFFER_SIZE:
+            next_events = next_events[-_EVENT_BUFFER_SIZE:]
+        entry.events = next_events
+
+
+def _is_cancelled(log_id: int) -> bool:
+    """Check the cancel_requested flag — called between repos so cancellation lands at a
+    safe boundary (after the in-flight DB writes for the previous repo commit)."""
+    with session_scope() as s:
+        entry = s.get(SyncLog, log_id)
+        return bool(entry and entry.cancel_requested)
+
+
 # --- Per-source runners ------------------------------------------------------
 
 
-async def _run_one_source(ds: DataSource) -> tuple[int, int]:
-    """Sync one data_source row. Returns (repos_synced, prs_synced)."""
+async def _run_one_source(ds: DataSource, log_id: int) -> tuple[int, int, bool]:
+    """Sync one data_source row. Returns (repos_synced, prs_synced, cancelled)."""
     repos_synced = 0
     prs_synced = 0
 
@@ -188,7 +233,11 @@ async def _run_one_source(ds: DataSource) -> tuple[int, int]:
         client_cm = GitLabClient(ds.token)
     else:
         log.warning("Unknown source %r on data_source %s, skipping", ds.source, ds.id)
-        return 0, 0
+        _emit(log_id, "warning", f"Unknown source {ds.source!r}, skipping")
+        return 0, 0, False
+
+    _progress(log_id, current_source_id=ds.id)
+    _emit(log_id, "info", f"Starting {ds.source}/{ds.org_or_group}")
 
     async with client_cm as client:
         if ds.source == "github":
@@ -196,6 +245,8 @@ async def _run_one_source(ds: DataSource) -> tuple[int, int]:
         else:
             refs = await client.list_group_projects(ds.org_or_group)
         log.info("[%s/%s] found %d repos", ds.source, ds.org_or_group, len(refs))
+        _progress(log_id, total_repos=len(refs))
+        _emit(log_id, "info", f"Found {len(refs)} repos in {ds.org_or_group}")
 
         with session_scope() as s:
             untracked = {
@@ -213,17 +264,28 @@ async def _run_one_source(ds: DataSource) -> tuple[int, int]:
         )
         list_deps = client.list_deployments
 
-        for ref in refs:
+        for index, ref in enumerate(refs, start=1):
+            if _is_cancelled(log_id):
+                _emit(log_id, "warning", f"Cancelled at {index - 1}/{len(refs)}")
+                return repos_synced, prs_synced, True
+
             if ref.name in excluded or ref.full_name in excluded:
                 continue
             if ref.full_name in untracked:
                 log.info("[%s/%s] skipping untracked %s", ds.source, ds.org_or_group, ref.full_name)
                 continue
+
+            _progress(log_id, current_repo=ref.full_name)
+            _emit(log_id, "info", f"Syncing {ref.full_name} ({index}/{len(refs)})")
             try:
                 prs = await list_prs(ref, since)
                 deps = await list_deps(ref, since)
             except Exception as e:  # noqa: BLE001
-                log.exception("[%s/%s] sync failed for %s: %s", ds.source, ds.org_or_group, ref.full_name, e)
+                log.exception(
+                    "[%s/%s] sync failed for %s: %s",
+                    ds.source, ds.org_or_group, ref.full_name, e,
+                )
+                _emit(log_id, "error", f"{ref.full_name} failed: {e!r}")
                 continue
             with session_scope() as s:
                 repo = _upsert_repo(s, ds.source, ref, data_source_id=ds.id)
@@ -235,20 +297,21 @@ async def _run_one_source(ds: DataSource) -> tuple[int, int]:
             repos_synced += 1
             log.info(
                 "[%s/%s] synced %s: %d PRs, %d deployments",
-                ds.source,
-                ds.org_or_group,
-                ref.full_name,
-                len(prs),
-                len(deps),
+                ds.source, ds.org_or_group, ref.full_name, len(prs), len(deps),
+            )
+            _progress(log_id, repos_done=repos_synced)
+            _emit(
+                log_id, "info",
+                f"Done {ref.full_name}: {len(prs)} PRs, {len(deps)} deployments",
             )
 
-    # Mark this source's sync time on success of its loop (regardless of per-repo errors).
+    # Mark this source's sync time on completion of its loop.
     with session_scope() as s:
         row = s.get(DataSource, ds.id)
         if row:
             row.last_synced_at = datetime.now(timezone.utc)
 
-    return repos_synced, prs_synced
+    return repos_synced, prs_synced, False
 
 
 async def run_sync(only_data_source_id: int | None = None) -> dict:
@@ -270,16 +333,28 @@ async def run_sync(only_data_source_id: int | None = None) -> dict:
     total_repos = 0
     total_prs = 0
     err: str | None = None
+    cancelled = False
 
     try:
         for ds in sources:
             log.info("Running sync for data_source %s/%s", ds.source, ds.org_or_group)
-            r, p = await _run_one_source(ds)
+            r, p, src_cancelled = await _run_one_source(ds, log_id)
             total_repos += r
             total_prs += p
+            if src_cancelled:
+                cancelled = True
+                break
     except Exception as e:  # noqa: BLE001
         err = str(e)[:2000]
         log.exception("Sync failed: %s", e)
+        _emit(log_id, "error", f"Sync failed: {e!r}")
+
+    if cancelled:
+        final_status = "cancelled"
+    elif err:
+        final_status = "failed"
+    else:
+        final_status = "completed"
 
     with session_scope() as s:
         entry = s.get(SyncLog, log_id)
@@ -287,8 +362,11 @@ async def run_sync(only_data_source_id: int | None = None) -> dict:
             entry.completed_at = datetime.now(timezone.utc)
             entry.repos_synced = total_repos
             entry.prs_synced = total_prs
-            entry.status = "failed" if err else "completed"
+            entry.status = final_status
             entry.error = err
+            entry.current_repo = None
+            entry.current_source_id = None
+    _emit(log_id, "info", f"Sync {final_status}: {total_repos} repos, {total_prs} PRs")
 
     from .snapshots import rebuild_current_period
 
@@ -299,7 +377,7 @@ async def run_sync(only_data_source_id: int | None = None) -> dict:
     cache_invalidate_all()
 
     return {
-        "status": "failed" if err else "completed",
+        "status": final_status,
         "repos_synced": total_repos,
         "prs_synced": total_prs,
         "error": err,

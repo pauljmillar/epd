@@ -6,6 +6,8 @@ import {
   useSyncStatus,
   useTeamsList,
 } from "../api/client";
+import type { SyncStatus } from "../api/types";
+import { SyncPopover } from "./SyncPopover";
 
 type SectionKey = "repos" | "teams" | "contributors";
 
@@ -119,8 +121,13 @@ export function Sidebar({ appName }: { appName: string }) {
         </div>
       </nav>
 
-      <div className="border-t border-border p-3 text-xs text-text-secondary">
-        <SyncIndicator status={status} synced={synced} failed={!!failed} />
+      <div className="border-t border-border p-3 text-xs text-text-secondary relative">
+        <SyncIndicator
+          syncStatus={sync ?? null}
+          syncedAt={synced}
+          failed={!!failed}
+          status={status}
+        />
       </div>
     </aside>
   );
@@ -195,26 +202,59 @@ function NavItem({
 }
 
 function SyncIndicator({
-  status,
-  synced,
+  syncStatus,
+  syncedAt,
   failed,
+  status,
 }: {
-  status: string;
-  synced: Date | null;
+  syncStatus: SyncStatus | null;
+  syncedAt: Date | null;
   failed: boolean;
+  status: string;
 }) {
-  let label = "Never synced";
-  if (status === "running") label = "Syncing…";
-  else if (synced) label = `Synced ${relTime(synced)}`;
+  const [open, setOpen] = useState(false);
+
+  let label: string;
+  if (status === "running") {
+    const total = syncStatus?.total_repos ?? 0;
+    const done = syncStatus?.repos_done ?? 0;
+    if (syncStatus?.cancel_requested) {
+      label = "Cancelling…";
+    } else if (total > 0) {
+      label = `Syncing ${done}/${total}`;
+    } else {
+      label = "Syncing…";
+    }
+  } else if (status === "failed") {
+    label = "Last sync failed";
+  } else if (status === "cancelled") {
+    label = syncedAt ? `Cancelled ${relTime(syncedAt)}` : "Cancelled";
+  } else if (syncedAt) {
+    label = `Synced ${relTime(syncedAt)}`;
+  } else {
+    label = "Never synced";
+  }
+
   return (
-    <div className="flex items-center gap-2">
-      <span
-        className={`inline-block w-2 h-2 rounded-full ${
-          failed ? "bg-alert" : "bg-text-tertiary"
-        }`}
-      />
-      <span className={failed ? "text-alert" : ""}>{label}</span>
-    </div>
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex items-center gap-2 w-full text-left hover:text-text"
+        aria-expanded={open}
+        aria-label="Sync status"
+      >
+        <span
+          className={`inline-block w-2 h-2 rounded-full ${
+            failed ? "bg-alert" : status === "running" ? "bg-text" : "bg-text-tertiary"
+          }`}
+        />
+        <span className={failed ? "text-alert" : ""}>{label}</span>
+      </button>
+      {open && syncStatus && (
+        <SyncPopover status={syncStatus} onClose={() => setOpen(false)} />
+      )}
+    </>
   );
 }
 

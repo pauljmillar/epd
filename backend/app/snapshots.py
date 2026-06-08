@@ -215,12 +215,21 @@ def finalize_prior_month() -> int:
 
 
 def last_sync_status() -> dict:
+    from .models import DataSource
+
     with session_scope() as s:
         entry = s.execute(
             select(SyncLog).order_by(SyncLog.started_at.desc()).limit(1)
         ).scalar_one_or_none()
         if not entry:
             return {"status": "never_run"}
+
+        current_source_label: str | None = None
+        if entry.current_source_id:
+            ds = s.get(DataSource, entry.current_source_id)
+            if ds:
+                current_source_label = f"{ds.source}/{ds.org_or_group}"
+
         return {
             "status": entry.status,
             "started_at": entry.started_at.isoformat(),
@@ -228,4 +237,11 @@ def last_sync_status() -> dict:
             "repos_synced": entry.repos_synced,
             "prs_synced": entry.prs_synced,
             "error": entry.error,
+            "total_repos": entry.total_repos or 0,
+            "repos_done": entry.repos_done or 0,
+            "current_source_id": entry.current_source_id,
+            "current_source_label": current_source_label,
+            "current_repo": entry.current_repo,
+            "cancel_requested": bool(entry.cancel_requested),
+            "events": list(entry.events or []),
         }

@@ -13,6 +13,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -183,5 +184,15 @@ class SyncLog(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     repos_synced: Mapped[int] = mapped_column(Integer, default=0)
     prs_synced: Mapped[int] = mapped_column(Integer, default=0)
-    status: Mapped[str] = mapped_column(String(32), default="running")  # running|completed|failed
+    status: Mapped[str] = mapped_column(
+        String(32), default="running"
+    )  # running | completed | failed | cancelled
     error: Mapped[str | None] = mapped_column(String(2048))
+
+    # Live progress (added in 0007). Updated as the sync runs.
+    total_repos: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    repos_done: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    current_source_id: Mapped[int | None] = mapped_column(Integer)
+    current_repo: Mapped[str | None] = mapped_column(String(512))
+    cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    events: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
