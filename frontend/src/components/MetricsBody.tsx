@@ -2,6 +2,7 @@
  * Reusable "KPI grid + charts" body shared by Org Overview, Team Detail, Contributor pages.
  * Accepts any object with the OrgMetrics-shaped kpis/series/config fields.
  */
+import { useLocation } from "react-router-dom";
 import type { OrgMetrics } from "../api/types";
 import { CycleTimeBreakdown } from "./CycleTimeBreakdown";
 import { KpiCard } from "./KpiCard";
@@ -57,6 +58,7 @@ export function MetricsBody({
   /** If provided, each KPI card links to `${linkPrefix}/${metricKey}`. Pass undefined for static. */
   linkPrefix?: string;
 }) {
+  const search = useLocation().search;
   const s = data.series;
   const sparkFor = (k: MetricKey): (number | null)[] => {
     switch (k) {
@@ -101,7 +103,7 @@ export function MetricsBody({
               badDirection={kpi.bad_direction}
               spark={sparkFor(k)}
               redWhenAbove={kpi.red_when_above}
-              to={linkPrefix ? `${linkPrefix}/${k}` : undefined}
+              to={linkPrefix ? `${linkPrefix}/${k}${search}` : undefined}
             />
           );
         })}

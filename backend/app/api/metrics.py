@@ -97,6 +97,22 @@ def _round_or_none(v: float | None, ndigits: int = 2) -> float | None:
     return round(v, ndigits) if v is not None else None
 
 
+def resolve_team_member_logins(s: Session, team_id: int) -> list[str]:
+    """Return all contributor logins for the given team. Empty list if team is missing or
+    has no members — _load_period_prs's author_logins short-circuits on empty so this
+    yields the natural 'no PRs' result rather than a 500."""
+    from ..models import TeamMember
+
+    return [
+        row[0]
+        for row in s.execute(
+            select(Contributor.login)
+            .join(TeamMember, TeamMember.contributor_id == Contributor.id)
+            .where(TeamMember.team_id == team_id)
+        ).all()
+    ]
+
+
 # --- Loaders -----------------------------------------------------------------
 
 
@@ -422,12 +438,17 @@ def _notable_prs_by_lead_time(prs: list[dict], n: int = 5) -> list[dict]:
 @router.get("/org")
 def org_metrics(
     period: str = Query("90d"),
+    team: int | None = Query(None),
     s: Session = Depends(get_session),
 ) -> dict:
-    cache_key = f"org:{period}"
+    cache_key = f"org:{period}:team:{team or 'all'}"
     cached = _cache_get(cache_key)
     if cached is not None:
         return cached
+
+    # When team is set, scope every PR query to its members. Unknown team => empty list
+    # which short-circuits _load_period_prs to "no PRs" — the natural "no data" shape.
+    member_logins = resolve_team_member_logins(s, team) if team is not None else None
 
     start, end = _date_range(period)
     prior_start = start - (end - start)
@@ -435,10 +456,10 @@ def org_metrics(
     horizon = _backfill_horizon(s)
     prior_is_valid = horizon is None or prior_start >= horizon
 
-    cur_prs = _load_period_prs(s, start, end)
+    cur_prs = _load_period_prs(s, start, end, author_logins=member_logins)
     cur_deps = _load_period_deployments(s, start, end)
     if prior_is_valid:
-        prior_prs = _load_period_prs(s, prior_start, prior_end)
+        prior_prs = _load_period_prs(s, prior_start, prior_end, author_logins=member_logins)
         prior_deps = _load_period_deployments(s, prior_start, prior_end)
     else:
         prior_prs = None
@@ -446,6 +467,7 @@ def org_metrics(
 
     payload = _compute_kpis(cur_prs, cur_deps, prior_prs, prior_deps, start, end, prior_start, prior_end)
     payload["period"] = period
+    payload["team_id"] = team
     payload["range"] = {"start": start.isoformat(), "end": end.isoformat()}
     payload["config"] = {"large_pr_threshold": settings.large_pr_threshold}
     payload["notable_prs"] = {"lead_time": _notable_prs_by_lead_time(cur_prs)}
@@ -486,9 +508,10 @@ def org_metrics(
 def repo_metrics(
     repo_full_name: str,
     period: str = Query("90d"),
+    team: int | None = Query(None),
     s: Session = Depends(get_session),
 ) -> dict:
-    cache_key = f"repo:{repo_full_name}:{period}"
+    cache_key = f"repo:{repo_full_name}:{period}:team:{team or 'all'}"
     cached = _cache_get(cache_key)
     if cached is not None:
         return cached
@@ -499,16 +522,23 @@ def repo_metrics(
     if not exists:
         raise HTTPException(404, f"Repo {repo_full_name!r} not found")
 
+    member_logins = resolve_team_member_logins(s, team) if team is not None else None
+
     start, end = _date_range(period)
     prior_start = start - (end - start)
     prior_end = start
     horizon = _backfill_horizon(s)
     prior_is_valid = horizon is None or prior_start >= horizon
 
-    cur_prs = _load_period_prs(s, start, end, repo_full_name=repo_full_name)
+    cur_prs = _load_period_prs(
+        s, start, end, repo_full_name=repo_full_name, author_logins=member_logins
+    )
     cur_deps = _load_period_deployments(s, start, end, repo_full_name=repo_full_name)
     if prior_is_valid:
-        prior_prs = _load_period_prs(s, prior_start, prior_end, repo_full_name=repo_full_name)
+        prior_prs = _load_period_prs(
+            s, prior_start, prior_end,
+            repo_full_name=repo_full_name, author_logins=member_logins,
+        )
         prior_deps = _load_period_deployments(s, prior_start, prior_end, repo_full_name=repo_full_name)
     else:
         prior_prs = None
@@ -516,6 +546,7 @@ def repo_metrics(
 
     payload = _compute_kpis(cur_prs, cur_deps, prior_prs, prior_deps, start, end, prior_start, prior_end)
     payload["period"] = period
+    payload["team_id"] = team
     payload["range"] = {"start": start.isoformat(), "end": end.isoformat()}
     payload["config"] = {"large_pr_threshold": settings.large_pr_threshold}
     payload["repo"] = {"full_name": repo_full_name}

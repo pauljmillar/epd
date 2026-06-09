@@ -1,16 +1,19 @@
 import { useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useLocation, useParams } from "react-router-dom";
 import { useOrgMetrics } from "../api/client";
 import type { OrgMetrics } from "../api/types";
 import { CycleTimeBreakdown } from "../components/CycleTimeBreakdown";
 import { ChartCard, METRIC_DEFS, METRIC_LABELS, type MetricKey } from "../components/MetricsBody";
 import { MetricLineChart } from "../components/MetricLineChart";
 import { PageHeader } from "../components/PageHeader";
+import { useTeamFilter, withTeamSearch } from "../lib/teamFilter";
 
 export function MetricDetail() {
   const { metricKey } = useParams<{ metricKey: MetricKey }>();
   const [period, setPeriod] = useState("90d");
-  const { data, isLoading, error } = useOrgMetrics(period);
+  const { teamId } = useTeamFilter();
+  const search = useLocation().search;
+  const { data, isLoading, error } = useOrgMetrics(period, teamId);
 
   if (!metricKey || !(metricKey in METRIC_DEFS)) {
     return (
@@ -21,7 +24,7 @@ export function MetricDetail() {
   return (
     <div>
       <div className="text-text-tertiary text-xs mb-2">
-        <Link to="/" className="hover:text-text">Overview</Link>
+        <Link to={withTeamSearch("/", search)} className="hover:text-text">Overview</Link>
         <span className="mx-2">›</span>
         <span className="text-text">{METRIC_LABELS[metricKey]}</span>
       </div>
@@ -29,6 +32,7 @@ export function MetricDetail() {
         title={METRIC_LABELS[metricKey]}
         period={period}
         onPeriodChange={setPeriod}
+        showTeamFilter
       />
       <p className="text-text-secondary text-sm -mt-4 mb-6">{METRIC_DEFS[metricKey]}</p>
 
@@ -153,6 +157,7 @@ function fmt(unit: string, v: number | null): string {
 }
 
 function TeamTable({ data, metricKey }: { data: OrgMetrics; metricKey: MetricKey }) {
+  const search = useLocation().search;
   const repoField: Record<MetricKey, keyof OrgMetrics["repos"][0]> = {
     deployment_frequency: "deploy_per_week",
     lead_time_p50: "lead_time_p50_hours",
@@ -193,7 +198,7 @@ function TeamTable({ data, metricKey }: { data: OrgMetrics; metricKey: MetricKey
           {sorted.map((t) => (
             <tr key={t.full_name} className="border-t border-border-subtle hover:bg-active">
               <td className="px-4 py-3 text-text">
-                <Link to={`/repos/${t.full_name}`}>{t.full_name}</Link>
+                <Link to={withTeamSearch(`/repos/${t.full_name}`, search)}>{t.full_name}</Link>
               </td>
               <td className="px-4 py-3 text-right text-text">
                 {fmt(unit, t[field] as number | null)}
@@ -214,6 +219,7 @@ function NotablePRs({
   prs: import("../api/types").NotablePR[];
   title: string;
 }) {
+  const search = useLocation().search;
   return (
     <div className="bg-card border border-border rounded">
       <div className="px-4 py-3 border-b border-border text-text font-medium text-[13px]">
@@ -242,7 +248,7 @@ function NotablePRs({
                 </a>
               </td>
               <td className="px-4 py-3 text-text-secondary">
-                <Link to={`/repos/${p.repo}`}>{p.repo}</Link>
+                <Link to={withTeamSearch(`/repos/${p.repo}`, search)}>{p.repo}</Link>
               </td>
               <td className="px-4 py-3 text-text-secondary">
                 {p.author ? <Link to={`/contributors/${p.author}`}>{p.author}</Link> : "—"}

@@ -4,22 +4,29 @@ import { useRepoMetrics } from "../api/client";
 import type { RepoMetrics } from "../api/types";
 import { MetricsBody } from "../components/MetricsBody";
 import { PageHeader } from "../components/PageHeader";
+import { useTeamFilter, withTeamSearch } from "../lib/teamFilter";
 
 export function RepoDetail() {
   const location = useLocation();
   // /repos/astral-sh/uv → repoFullName = "astral-sh/uv"
   const repoFullName = location.pathname.replace(/^\/repos\//, "") || undefined;
   const [period, setPeriod] = useState("90d");
-  const { data, isLoading, error } = useRepoMetrics(repoFullName, period);
+  const { teamId } = useTeamFilter();
+  const { data, isLoading, error } = useRepoMetrics(repoFullName, period, teamId);
 
   return (
     <div>
       <div className="text-text-tertiary text-xs mb-2">
-        <Link to="/" className="hover:text-text">Overview</Link>
+        <Link to={withTeamSearch("/", location.search)} className="hover:text-text">Overview</Link>
         <span className="mx-2">›</span>
         <span className="text-text">{repoFullName}</span>
       </div>
-      <PageHeader title={repoFullName ?? "Repo"} period={period} onPeriodChange={setPeriod} />
+      <PageHeader
+        title={repoFullName ?? "Repo"}
+        period={period}
+        onPeriodChange={setPeriod}
+        showTeamFilter
+      />
 
       {error && (
         <div className="bg-card border border-alert text-alert p-4 rounded mb-4 text-sm">

@@ -1,18 +1,20 @@
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import { useOrgMetrics } from "../api/client";
 import type { OrgMetrics } from "../api/types";
 import { ChartCard, MetricsBody } from "../components/MetricsBody";
 import { PageHeader } from "../components/PageHeader";
 import { Sparkline } from "../components/Sparkline";
+import { useTeamFilter, withTeamSearch } from "../lib/teamFilter";
 
 export function OrgOverview() {
   const [period, setPeriod] = useState("90d");
-  const { data, isLoading, error } = useOrgMetrics(period);
+  const { teamId } = useTeamFilter();
+  const { data, isLoading, error } = useOrgMetrics(period, teamId);
 
   return (
     <div>
-      <PageHeader title="Overview" period={period} onPeriodChange={setPeriod} />
+      <PageHeader title="Overview" period={period} onPeriodChange={setPeriod} showTeamFilter />
 
       {error && (
         <div className="bg-card border border-alert text-alert p-4 rounded mb-4 text-sm">
@@ -101,6 +103,7 @@ function RepoTable({
   repos: OrgMetrics["repos"];
   largePrThreshold: number;
 }) {
+  const search = useLocation().search;
   if (!repos.length) {
     return (
       <div className="bg-card border border-border rounded p-6 text-text-secondary text-sm">
@@ -139,7 +142,10 @@ function RepoTable({
                 className="border-t border-border-subtle hover:bg-active cursor-pointer"
               >
                 <td className="px-4 py-3 text-text">
-                  <Link to={`/repos/${t.full_name}`} className="block">
+                  <Link
+                    to={withTeamSearch(`/repos/${t.full_name}`, search)}
+                    className="block"
+                  >
                     {t.full_name}
                   </Link>
                 </td>

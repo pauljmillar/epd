@@ -67,20 +67,26 @@ export async function verifyToken(token: string): Promise<boolean> {
   return r.ok;
 }
 
-export function useOrgMetrics(period: string) {
+export function useOrgMetrics(period: string, teamId?: number | null) {
+  const suffix = teamId != null ? `&team=${teamId}` : "";
   return useQuery({
-    queryKey: ["org", period],
-    queryFn: () => get<OrgMetrics>(`/api/v1/metrics/org?period=${period}`),
+    queryKey: ["org", period, teamId ?? null],
+    queryFn: () => get<OrgMetrics>(`/api/v1/metrics/org?period=${period}${suffix}`),
   });
 }
 
-export function useRepoMetrics(repoFullName: string | undefined, period: string) {
+export function useRepoMetrics(
+  repoFullName: string | undefined,
+  period: string,
+  teamId?: number | null,
+) {
+  const suffix = teamId != null ? `&team=${teamId}` : "";
   return useQuery({
-    queryKey: ["repo", repoFullName, period],
+    queryKey: ["repo", repoFullName, period, teamId ?? null],
     enabled: !!repoFullName,
     queryFn: () =>
       get<import("./types").RepoMetrics>(
-        `/api/v1/metrics/repo/${repoFullName}?period=${period}`,
+        `/api/v1/metrics/repo/${repoFullName}?period=${period}${suffix}`,
       ),
   });
 }

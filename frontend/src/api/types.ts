@@ -95,6 +95,7 @@ export interface NotablePR {
 
 export interface BaseMetrics {
   period: string;
+  team_id?: number | null;
   range: { start: string; end: string };
   config: { large_pr_threshold: number };
   counts: { merged_prs: number; deployments: number; large_prs: number };

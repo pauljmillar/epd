@@ -28,6 +28,7 @@ from .metrics import (
     _notable_prs_by_lead_time,
     _round_or_none,
     cache_invalidate_all,
+    resolve_team_member_logins,
 )
 
 router = APIRouter(prefix="/api/v1/teams", tags=["teams"], dependencies=[Depends(require_auth)])
@@ -154,14 +155,7 @@ def team_metrics(
     if not team:
         raise HTTPException(404, "Team not found")
 
-    member_logins = [
-        row[0]
-        for row in s.execute(
-            select(Contributor.login)
-            .join(TeamMember, TeamMember.contributor_id == Contributor.id)
-            .where(TeamMember.team_id == team_id)
-        ).all()
-    ]
+    member_logins = resolve_team_member_logins(s, team_id)
 
     start, end = _date_range(period)
     prior_start = start - (end - start)
