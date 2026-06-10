@@ -202,8 +202,17 @@ def _load_period_prs(
 
 
 def _load_period_deployments(
-    s: Session, start: date, end: date, *, repo_full_name: str | None = None
+    s: Session,
+    start: date,
+    end: date,
+    *,
+    repo_full_name: str | None = None,
+    in_repo_full_names: list[str] | None = None,
 ) -> list[dict]:
+    """Deployments triggered in [start, end] from tracked repos. Filters compose:
+    - `repo_full_name`: single-repo scope (Repo Detail).
+    - `in_repo_full_names`: restrict to a set (e.g. "repos this team has worked in").
+    """
     stmt = (
         select(Deployment, Repository.full_name)
         .join(Repository, Deployment.repo_id == Repository.id)
@@ -213,6 +222,11 @@ def _load_period_deployments(
     )
     if repo_full_name is not None:
         stmt = stmt.where(Repository.full_name == repo_full_name)
+    if in_repo_full_names is not None:
+        if not in_repo_full_names:
+            # Team had zero repo activity → no deployments to attribute.
+            return []
+        stmt = stmt.where(Repository.full_name.in_(in_repo_full_names))
     return [
         {"triggered_at": d.triggered_at, "repo_full_name": full}
         for d, full in s.execute(stmt).all()
@@ -437,7 +451,7 @@ def _notable_prs_by_lead_time(prs: list[dict], n: int = 5) -> list[dict]:
 
 @router.get("/org")
 def org_metrics(
-    period: str = Query("90d"),
+    period: str = Query("30d"),
     team: int | None = Query(None),
     s: Session = Depends(get_session),
 ) -> dict:
@@ -457,10 +471,21 @@ def org_metrics(
     prior_is_valid = horizon is None or prior_start >= horizon
 
     cur_prs = _load_period_prs(s, start, end, author_logins=member_logins)
-    cur_deps = _load_period_deployments(s, start, end)
+    # When team filter is active, scope deployments to repos the team has any PR activity
+    # in. Without this, the deploy-freq KPI would stay org-wide and confusingly not change
+    # when the team filter is toggled.
+    team_repo_filter = (
+        sorted({pr["repo_full_name"] for pr in cur_prs}) if team is not None else None
+    )
+    cur_deps = _load_period_deployments(s, start, end, in_repo_full_names=team_repo_filter)
     if prior_is_valid:
         prior_prs = _load_period_prs(s, prior_start, prior_end, author_logins=member_logins)
-        prior_deps = _load_period_deployments(s, prior_start, prior_end)
+        prior_team_repo_filter = (
+            sorted({pr["repo_full_name"] for pr in prior_prs}) if team is not None else None
+        )
+        prior_deps = _load_period_deployments(
+            s, prior_start, prior_end, in_repo_full_names=prior_team_repo_filter
+        )
     else:
         prior_prs = None
         prior_deps = None
@@ -507,7 +532,7 @@ def org_metrics(
 @router.get("/repo/{repo_full_name:path}")
 def repo_metrics(
     repo_full_name: str,
-    period: str = Query("90d"),
+    period: str = Query("30d"),
     team: int | None = Query(None),
     s: Session = Depends(get_session),
 ) -> dict:
@@ -584,7 +609,7 @@ def repo_metrics(
 @router.get("/contributor/{login}")
 def contributor_metrics(
     login: str,
-    period: str = Query("90d"),
+    period: str = Query("30d"),
     s: Session = Depends(get_session),
 ) -> dict:
     cache_key = f"contributor:{login}:{period}"

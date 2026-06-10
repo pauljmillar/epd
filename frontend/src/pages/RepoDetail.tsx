@@ -10,7 +10,7 @@ export function RepoDetail() {
   const location = useLocation();
   // /repos/astral-sh/uv → repoFullName = "astral-sh/uv"
   const repoFullName = location.pathname.replace(/^\/repos\//, "") || undefined;
-  const [period, setPeriod] = useState("90d");
+  const [period, setPeriod] = useState("30d");
   const { teamId } = useTeamFilter();
   const { data, isLoading, error } = useRepoMetrics(repoFullName, period, teamId);
 

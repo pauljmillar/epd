@@ -8,7 +8,7 @@ import { PageHeader } from "../components/PageHeader";
 export function TeamDetail() {
   const { teamId } = useParams<{ teamId: string }>();
   const id = teamId ? Number(teamId) : undefined;
-  const [period, setPeriod] = useState("90d");
+  const [period, setPeriod] = useState("30d");
   const { data, isLoading, error } = useTeamMetrics(id, period);
 
   return (

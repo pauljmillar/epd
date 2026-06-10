@@ -156,6 +156,8 @@ class GitLabClient:
 
     async def list_merged_mrs(self, repo: RepoRef, since: datetime) -> list[PRRecord]:
         """All merged MRs in `repo` updated since `since`, with author + commits[0] + notes."""
+        # `with_stats=true` makes the list endpoint return additions/deletions per MR (older
+        # GitLab instances don't populate those on the per-MR detail). One round trip vs N.
         list_data = await self._paged(
             f"{GITLAB_API}/projects/{repo.source_id}/merge_requests",
             {
@@ -164,6 +166,7 @@ class GitLabClient:
                 "sort": "desc",
                 "updated_after": since.isoformat().replace("+00:00", "Z"),
                 "scope": "all",
+                "with_stats": "true",
             },
         )
 
@@ -205,6 +208,10 @@ class GitLabClient:
             merge_commit_body = None
 
             author = detail.get("author") or {}
+            # Prefer additions/deletions from the list item (populated by with_stats=true
+            # on older GitLab versions) and fall back to detail when the list omitted them.
+            additions = _first_nonzero_int(mr.get("additions"), detail.get("additions"))
+            deletions = _first_nonzero_int(mr.get("deletions"), detail.get("deletions"))
             out.append(
                 PRRecord(
                     source_id=str(detail.get("id") or iid),
@@ -216,8 +223,8 @@ class GitLabClient:
                     opened_at=_parse_dt(detail["created_at"]) or datetime.now(timezone.utc),
                     merged_at=_parse_dt(detail.get("merged_at")),
                     closed_at=_parse_dt(detail.get("closed_at")),
-                    additions=int(detail.get("additions") or 0),
-                    deletions=int(detail.get("deletions") or 0),
+                    additions=additions,
+                    deletions=deletions,
                     base_branch=detail.get("target_branch") or "main",
                     is_draft=bool(detail.get("draft") or detail.get("work_in_progress")),
                     first_commit_at=first_commit_at,
@@ -297,6 +304,22 @@ def _notes_to_reviews(notes: list[dict], author_username: str | None) -> list[Re
             )
         )
     return out
+
+
+def _first_nonzero_int(*values: object) -> int:
+    """Return the first integer-convertible value that is truthy (non-zero). Falls back to
+    0 if none are. Used to prefer the with_stats list value over the detail value when the
+    detail one is 0 (older GitLab)."""
+    for v in values:
+        if v is None:
+            continue
+        try:
+            n = int(v)
+        except (TypeError, ValueError):
+            continue
+        if n:
+            return n
+    return 0
 
 
 def backfill_since() -> datetime:

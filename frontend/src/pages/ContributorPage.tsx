@@ -20,7 +20,7 @@ function fmtLines(v: number | null): string {
 
 export function ContributorPage() {
   const { login } = useParams<{ login: string }>();
-  const [period, setPeriod] = useState("90d");
+  const [period, setPeriod] = useState("30d");
   const { data, isLoading, error } = useContributorMetrics(login, period);
 
   return (

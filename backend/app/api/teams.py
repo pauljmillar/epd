@@ -147,7 +147,7 @@ def remove_member(team_id: int, login: str, s: Session = Depends(get_session)) -
 @router.get("/{team_id}/metrics")
 def team_metrics(
     team_id: int,
-    period: str = "90d",
+    period: str = "30d",
     s: Session = Depends(get_session),
 ) -> dict:
     """Metrics scoped to PRs authored by members of this team across all repos."""

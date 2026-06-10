@@ -8,7 +8,7 @@ import { Sparkline } from "../components/Sparkline";
 import { useTeamFilter, withTeamSearch } from "../lib/teamFilter";
 
 export function OrgOverview() {
-  const [period, setPeriod] = useState("90d");
+  const [period, setPeriod] = useState("30d");
   const { teamId } = useTeamFilter();
   const { data, isLoading, error } = useOrgMetrics(period, teamId);
 

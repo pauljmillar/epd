@@ -10,7 +10,7 @@ import { useTeamFilter, withTeamSearch } from "../lib/teamFilter";
 
 export function MetricDetail() {
   const { metricKey } = useParams<{ metricKey: MetricKey }>();
-  const [period, setPeriod] = useState("90d");
+  const [period, setPeriod] = useState("30d");
   const { teamId } = useTeamFilter();
   const search = useLocation().search;
   const { data, isLoading, error } = useOrgMetrics(period, teamId);
